@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import { BusFront, MapPin, Radio } from "lucide-react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { createMapTilerStyle } from "@/lib/maptiler-style";
@@ -116,6 +117,7 @@ export default function BusMap() {
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setInterval> | undefined;
     let animationFrame: number | undefined;
+    maplibregl.setWorkerUrl(maplibreWorkerUrl);
     const map = new maplibregl.Map({
       container: ref.current,
       style: createMapTilerStyle(apiKey, isDark),

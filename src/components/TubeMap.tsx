@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { createMapTilerStyle } from "@/lib/maptiler-style";
 import {
@@ -87,6 +88,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
     }
     if (!ref.current) return;
 
+    maplibregl.setWorkerUrl(maplibreWorkerUrl);
     const camera = cameraRef.current;
     const map = new maplibregl.Map({
       container: ref.current,
