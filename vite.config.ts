@@ -7,6 +7,12 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
+  nitro: {
+    preset:
+      process.env["npm_lifecycle_event"] === "build:pages"
+        ? "cloudflare-pages"
+        : "cloudflare-module",
+  },
   vite: {
     worker: { format: "es" },
     optimizeDeps: {
