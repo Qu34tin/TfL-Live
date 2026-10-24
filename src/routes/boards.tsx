@@ -1,11 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { Accessibility, AlertCircle, Info, LoaderCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
 import {
   cleanName,
   fetchAllStations,
   fetchArrivals,
+  fetchStationAccessibility,
   LINE_COLOURS,
   minutes,
   STATIONS,
@@ -57,6 +59,16 @@ function Boards() {
     queryKey: ["arrivals", stop.id],
     queryFn: () => fetchArrivals(stop.id),
     refetchInterval: 20_000,
+  });
+
+  const {
+    data: accessibilityItems,
+    isLoading: accessibilityLoading,
+    error: accessibilityError,
+  } = useQuery({
+    queryKey: ["station-accessibility", stop.id],
+    queryFn: () => fetchStationAccessibility(stop.id),
+    staleTime: 5 * 60_000,
   });
 
   const platforms = new Map<string, NonNullable<typeof data>>();
@@ -147,6 +159,61 @@ function Boards() {
         </div>
 
         <h2 className="mt-12 font-display text-2xl font-bold">{stop.name}</h2>
+        <section
+          aria-labelledby="station-accessibility-heading"
+          className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+        >
+          <div className="flex items-start gap-3 border-b border-border bg-secondary/40 px-4 py-3">
+            <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Accessibility size={18} aria-hidden="true" />
+            </span>
+            <div>
+              <h3 id="station-accessibility-heading" className="font-display text-base font-bold">
+                Station accessibility
+              </h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Facilities reported by TfL for {stop.name}
+              </p>
+            </div>
+          </div>
+          <div className="p-4">
+            {accessibilityLoading && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+                <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+                Loading accessibility information…
+              </p>
+            )}
+            {accessibilityError && (
+              <p className="flex items-start gap-2 text-sm text-destructive" role="alert">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                Accessibility information could not be loaded. Please try again later.
+              </p>
+            )}
+            {accessibilityItems && accessibilityItems.length > 0 && (
+              <dl className="grid gap-2 sm:grid-cols-2">
+                {accessibilityItems.map((item) => (
+                  <div
+                    key={item.label}
+                    className="rounded-lg border border-border bg-background/70 px-3 py-2.5"
+                  >
+                    <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      {item.label}
+                    </dt>
+                    <dd className="mt-0.5 break-words text-sm font-semibold text-foreground">
+                      {item.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {accessibilityItems?.length === 0 && (
+              <p className="flex items-start gap-2 text-sm text-muted-foreground">
+                <Info size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                TfL has not provided accessibility details for this station.
+              </p>
+            )}
+          </div>
+        </section>
         {error && <p className="mt-4 text-destructive">Couldn't load arrivals. Retrying…</p>}
         {isLoading && <div className="mt-6 h-48 animate-pulse rounded-xl bg-board" />}
         {data && data.length === 0 && (

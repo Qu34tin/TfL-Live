@@ -123,7 +123,6 @@ export default function BusMap() {
       zoom: 12,
       attributionControl: { compact: true },
     });
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
     const popup = new maplibregl.Popup({
       closeButton: false,
       closeOnClick: false,

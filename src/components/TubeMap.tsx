@@ -27,6 +27,8 @@ import {
   OVERGROUND_LINE_IDS,
   fetchLineArrivals,
   fetchOvergroundArrivals,
+  fetchStationAccessibility,
+  type StationAccessibilityItem,
   type LineArrival,
 } from "@/lib/tfl";
 
@@ -97,7 +99,6 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
       attributionControl: { compact: true },
     });
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
     let trainActions: TrainActions | undefined;
     let lineArrivals: LineArrival[] = [];
@@ -120,6 +121,33 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
       className: "tube-popup",
       offset: 12,
     });
+    let selectedStationId = "";
+    const stationPopup = new maplibregl.Popup({
+      closeButton: true,
+      closeOnClick: false,
+      className: "tube-popup",
+      offset: 12,
+    });
+    stationPopup.on("close", () => {
+      selectedStationId = "";
+    });
+    const stationAccessibilityCache = new Map<string, Promise<StationAccessibilityItem[]>>();
+
+    const stationAccessibilityHtml = (
+      stationName: string,
+      linesHtml: string,
+      items: StationAccessibilityItem[],
+    ) => {
+      const details = items.length
+        ? `<ul class="station-accessibility__list">${items
+            .map(
+              (item) =>
+                `<li class="station-accessibility__item"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></li>`,
+            )
+            .join("")}</ul>`
+        : '<p class="station-accessibility__empty">TfL has not provided accessibility details for this station.</p>';
+      return `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Station information</p><h2 class="station-accessibility__title">${escapeHtml(stationName)}</h2><p class="station-accessibility__section-title">Lines serving this station</p>${linesHtml}<p class="station-accessibility__source">Accessibility information reported by TfL</p>${details}</section>`;
+    };
 
     const updateTrainPositions = () => {
       if (!trainActions) return;
@@ -357,6 +385,38 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             .map(({ lineId, path }) => ({ lineId, path })),
         );
         stationNames = new Map(stations.map((station) => [station.id, station.name]));
+        const stationLines = new Map<string, Set<string>>();
+        for (const segment of [...segments, ...elizabethSegments, ...overgroundSegments]) {
+          for (const stationId of [segment.fromStationId, segment.toStationId]) {
+            const lines = stationLines.get(stationId) ?? new Set<string>();
+            lines.add(segment.lineId);
+            stationLines.set(stationId, lines);
+          }
+        }
+        const stationLinesHtml = (stationId: string) => {
+          const lines = [...(stationLines.get(stationId) ?? [])].sort();
+          if (lines.length === 0) {
+            return '<p class="station-accessibility__empty">Line information is not available.</p>';
+          }
+          const labels: Record<string, string> = {
+            "hammersmith-city": "Hammersmith & City",
+            dlr: "DLR",
+            tram: "Tram",
+          };
+          return `<ul class="station-accessibility__lines">${lines
+            .map((lineId) => {
+              const label =
+                labels[lineId] ??
+                `${lineId
+                  .split("-")
+                  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                  .join(" ")} line`;
+              const color = LINE_COLOURS[lineId] ?? "#64748b";
+              const textColor = lineId === "circle" ? "#1f2937" : "#ffffff";
+              return `<li class="station-accessibility__line" style="--line-color:${color};--line-text-color:${textColor}">${escapeHtml(label)}</li>`;
+            })
+            .join("")}</ul>`;
+        };
 
         map.addSource("tube-lines", {
           type: "geojson",
@@ -478,7 +538,9 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
                 type: "Feature" as const,
                 geometry: { type: "Point" as const, coordinates: station.coordinates },
                 properties: {
+                  id: station.id,
                   name: station.name,
+                  linesHtml: stationLinesHtml(station.id),
                   html: `<strong>${escapeHtml(station.name)}</strong>`,
                 },
               })),
@@ -507,7 +569,9 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
                 type: "Feature" as const,
                 geometry: { type: "Point" as const, coordinates: station.coordinates },
                 properties: {
+                  id: station.id,
                   name: station.name,
+                  linesHtml: stationLinesHtml(station.id),
                   html: `<strong>${escapeHtml(station.name)}</strong>`,
                 },
               })),
@@ -637,16 +701,30 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           },
         });
 
+        const trainLayerIds = ["trains", "elizabeth-trains", "overground-trains", "line-trains"];
+        let hoveredTrainPoint: [number, number] | null = null;
+        let hoveredTrainHtml = "";
+        const updateHoveredTrainPopup = () => {
+          if (!hoveredTrainPoint || stationPopup.isOpen()) return;
+          const train = map.queryRenderedFeatures(hoveredTrainPoint, {
+            layers: trainLayerIds,
+          })[0];
+          const html = train?.properties["html"];
+          if (typeof html !== "string") {
+            hoveredTrainHtml = "";
+            popup.remove();
+            return;
+          }
+          if (hoveredTrainHtml !== html) {
+            popup.setHTML(html);
+            hoveredTrainHtml = html;
+          }
+          popup.setLngLat(map.unproject(hoveredTrainPoint)).addTo(map);
+        };
+        map.on("render", updateHoveredTrainPopup);
         map.on("mousemove", (event: maplibregl.MapMouseEvent) => {
           const features = map.queryRenderedFeatures(event.point, {
-            layers: [
-              "trains",
-              "elizabeth-trains",
-              "overground-trains",
-              "line-trains",
-              "stations",
-              "overground-stations",
-            ],
+            layers: [...trainLayerIds, "stations", "overground-stations"],
           });
           const feature =
             features.find((candidate) => candidate.layer.id === "trains") ??
@@ -656,14 +734,84 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             features.find((candidate) => candidate.layer.id === "stations") ??
             features.find((candidate) => candidate.layer.id === "overground-stations");
           if (!feature) {
+            hoveredTrainPoint = null;
+            hoveredTrainHtml = "";
             map.getCanvas().style.cursor = "";
             popup.remove();
             return;
           }
           map.getCanvas().style.cursor = "pointer";
+          if (feature.layer.id === "stations" || feature.layer.id === "overground-stations") {
+            hoveredTrainPoint = null;
+            hoveredTrainHtml = "";
+            if (selectedStationId === String(feature.properties["id"])) {
+              popup.remove();
+              return;
+            }
+            popup.setLngLat(event.lngLat).setHTML(String(feature.properties["html"])).addTo(map);
+            return;
+          }
+          hoveredTrainPoint = [event.point.x, event.point.y];
+          hoveredTrainHtml = String(feature.properties["html"]);
+          if (stationPopup.isOpen()) {
+            popup.remove();
+            return;
+          }
           popup.setLngLat(event.lngLat).setHTML(String(feature.properties["html"])).addTo(map);
         });
+        map.on("click", (event: maplibregl.MapMouseEvent) => {
+          const station = map.queryRenderedFeatures(event.point, {
+            layers: ["stations", "overground-stations"],
+          })[0];
+          if (!station) {
+            selectedStationId = "";
+            stationPopup.remove();
+            popup.remove();
+            return;
+          }
+
+          const stationId = String(station.properties["id"]);
+          const stationName = String(station.properties["name"]);
+          const linesHtml = String(station.properties["linesHtml"]);
+          selectedStationId = stationId;
+          popup.remove();
+          stationPopup
+            .setLngLat(event.lngLat)
+            .setHTML(
+              `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Station information</p><h2 class="station-accessibility__title">${escapeHtml(stationName)}</h2><p class="station-accessibility__section-title">Lines serving this station</p>${linesHtml}<p class="station-accessibility__source">Accessibility information reported by TfL</p><p class="station-accessibility__loading">Loading TfL information…</p></section>`,
+            )
+            .addTo(map);
+
+          let accessibilityRequest = stationAccessibilityCache.get(stationId);
+          if (!accessibilityRequest) {
+            accessibilityRequest = fetchStationAccessibility(stationId);
+            stationAccessibilityCache.set(stationId, accessibilityRequest);
+            void accessibilityRequest.catch(() => {
+              if (stationAccessibilityCache.get(stationId) === accessibilityRequest) {
+                stationAccessibilityCache.delete(stationId);
+              }
+            });
+          }
+          void accessibilityRequest.then(
+            (items) => {
+              if (selectedStationId !== stationId || !stationPopup.isOpen()) return;
+              stationPopup.setHTML(stationAccessibilityHtml(stationName, linesHtml, items));
+            },
+            (accessibilityError: unknown) => {
+              console.error(
+                `Unable to load accessibility details for ${stationName}`,
+                accessibilityError,
+              );
+              if (selectedStationId !== stationId || !stationPopup.isOpen()) return;
+              stationPopup.setHTML(
+                `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Station information</p><h2 class="station-accessibility__title">${escapeHtml(stationName)}</h2><p class="station-accessibility__section-title">Lines serving this station</p>${linesHtml}<p class="station-accessibility__source">Accessibility information reported by TfL</p><p class="station-accessibility__error">Accessibility information could not be loaded. Please try again.</p></section>`,
+              );
+            },
+          );
+        });
         map.on("mouseout", () => {
+          hoveredTrainPoint = null;
+          hoveredTrainHtml = "";
           map.getCanvas().style.cursor = "";
           popup.remove();
         });

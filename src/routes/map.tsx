@@ -57,7 +57,7 @@ function MapPage() {
             <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/80 bg-white/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-200">
               <p>Right-drag to orbit</p>
               <p>Zoom in for buildings</p>
-              <p>Hover for details</p>
+              <p>Click a station for accessibility info</p>
             </div>
           </>
         )}

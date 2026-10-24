@@ -117,6 +117,45 @@ const BOARD_LINES = Object.keys(LINE_COLOURS);
 
 export type Station = { id: string; name: string; lat: number; lon: number; lines: string[] };
 
+export type StationAccessibilityItem = { label: string; value: string };
+
+export async function fetchStationAccessibility(
+  stopId: string,
+): Promise<StationAccessibilityItem[]> {
+  const response = await fetch(`${API}/StopPoint/${encodeURIComponent(stopId)}`);
+  if (!response.ok) {
+    throw new Error(`Station information unavailable (${response.status})`);
+  }
+  const stopPoint: {
+    accessibilitySummary?: string;
+    additionalProperties?: { key?: string; value?: string }[];
+  } = await response.json();
+  const items: StationAccessibilityItem[] = [];
+  const seenKeys = new Set<string>();
+  if (stopPoint.accessibilitySummary?.trim()) {
+    items.push({ label: "Accessibility summary", value: stopPoint.accessibilitySummary.trim() });
+  }
+  for (const property of stopPoint.additionalProperties ?? []) {
+    const key = property.key?.trim();
+    const value = property.value?.trim();
+    if (!key || !value || !/access|step.?free|lift|wheelchair|toilet|ramp|assistance/i.test(key)) {
+      continue;
+    }
+    const normalizedKey = key.toLowerCase();
+    if (seenKeys.has(normalizedKey)) continue;
+    seenKeys.add(normalizedKey);
+    items.push({
+      label: key
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+      value,
+    });
+  }
+  return items;
+}
+
 export function cleanName(n: string) {
   return n.replace(/ (?:Underground|Rail) Station$/, "").replace(/ \(.*?\)$/, "");
 }

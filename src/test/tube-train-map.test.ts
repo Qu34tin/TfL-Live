@@ -22,6 +22,7 @@ import {
   fetchLineArrivals,
   fetchLineStatus,
   fetchOvergroundArrivals,
+  fetchStationAccessibility,
   OVERGROUND_LINE_IDS,
 } from "@/lib/tfl";
 
@@ -207,6 +208,34 @@ describe("tube train map data", () => {
         lines: ["elizabeth"],
       });
       expect(fetchMock).toHaveBeenCalledWith("https://api.tfl.gov.uk/Line/elizabeth/StopPoints");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fetches TfL accessibility and lift details for a station", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        additionalProperties: [
+          { key: "AccessViaLift", value: "No" },
+          { key: "LimitedCapacityLift", value: "No" },
+          { key: "Lifts", value: "0" },
+          { key: "Toilets", value: "no" },
+          { key: "WiFi", value: "yes" },
+        ],
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(fetchStationAccessibility("940GZZLUOXC")).resolves.toEqual([
+        { label: "Access Via Lift", value: "No" },
+        { label: "Limited Capacity Lift", value: "No" },
+        { label: "Lifts", value: "0" },
+        { label: "Toilets", value: "no" },
+      ]);
+      expect(fetchMock).toHaveBeenCalledWith("https://api.tfl.gov.uk/StopPoint/940GZZLUOXC");
     } finally {
       vi.unstubAllGlobals();
     }
