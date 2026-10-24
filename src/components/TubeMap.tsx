@@ -166,10 +166,14 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
         type: "FeatureCollection",
         features: positions.map((train) => {
           const color = LINE_COLOURS[train.lineId] ?? "#ffffff";
+          const railPaths = railPathsByLine.get(train.lineId);
+          const coordinates = railPaths?.length
+            ? snapCoordinateToRailPaths(train.coordinates, railPaths, 400)
+            : train.coordinates;
 
           return {
             type: "Feature" as const,
-            geometry: { type: "Point" as const, coordinates: train.coordinates },
+            geometry: { type: "Point" as const, coordinates },
             properties: {
               color,
               html: buildTrainTooltipHtml(train, stationNames),
