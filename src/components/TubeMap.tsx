@@ -202,7 +202,14 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
         type: "FeatureCollection",
         features: positions.map((train) => ({
           type: "Feature" as const,
-          geometry: { type: "Point" as const, coordinates: train.coordinates },
+          geometry: {
+            type: "Point" as const,
+            coordinates: snapCoordinateToRailPaths(
+              train.coordinates,
+              railPathsByLine.get(train.lineId) ?? [],
+              400,
+            ),
+          },
           properties: {
             color: LINE_COLOURS[train.lineId] ?? "#ffffff",
             html: buildTrainTooltipHtml(train, stationNames),
@@ -316,8 +323,26 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             overgroundSegmentKeys.add(key);
             overgroundSegments.push(segment);
           }
+          let overgroundPaths = routeData.segments.map(({ path }) => path);
+          try {
+            const railPaths = await fetchOsmRailPaths(route.lineId);
+            if (cancelled) return;
+            if (railPaths.length > 0) {
+              railPathsByLine.set(route.lineId, railPaths);
+              overgroundPaths = railPaths;
+            } else {
+              console.warn(
+                `No detailed OSM rail geometry found for ${route.lineId}; using TfL route geometry`,
+              );
+            }
+          } catch (railError) {
+            console.error(
+              `Unable to load ${route.lineId} rail geometry from local OSM data`,
+              railError,
+            );
+          }
           overgroundLinePaths.push(
-            ...routeData.segments.map(({ path }) => ({ lineId: route.lineId, path })),
+            ...overgroundPaths.map((path) => ({ lineId: route.lineId, path })),
           );
         }
         segments = snapTrackSegmentsToStations(segments, stations);
@@ -675,7 +700,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
         if (cancelled) return;
         let lastPositionUpdate = 0;
         const animateTrainPositions = (timestamp: number) => {
-          if (timestamp - lastPositionUpdate >= 1000 / 30) {
+          if (timestamp - lastPositionUpdate >= 1000 / 60) {
             updateTrainPositions();
             updateElizabethLineTrainPositions();
             updateLineTrainPositions();

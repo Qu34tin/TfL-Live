@@ -50,6 +50,29 @@ describe("tube train map data", () => {
     ]);
   });
 
+  it("parses detailed OSM geometry for Overground lines", () => {
+    const paths = parseOsmRailPaths(
+      {
+        liberty: [
+          [
+            [0.18423, 51.57498],
+            [0.1871, 51.57582],
+            [0.22012, 51.56865],
+          ],
+        ],
+      },
+      "liberty",
+    );
+
+    expect(paths).toEqual([
+      [
+        [0.18423, 51.57498],
+        [0.1871, 51.57582],
+        [0.22012, 51.56865],
+      ],
+    ]);
+  });
+
   it("loads local OSM rail geometry instead of relying on a schematic route feed", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
