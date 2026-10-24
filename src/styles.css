@@ -159,6 +159,12 @@
   min-width: 215px;
   max-width: min(320px, calc(100vw - 48px));
 }
+.dark .tube-popup .maplibregl-popup-content:has(.train-tooltip) {
+  border-color: rgb(255 255 255 / 12%);
+  background: #192126;
+  color: #e2e8f0;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 45%);
+}
 .tube-popup .maplibregl-popup-content:has(.station-accessibility) {
   width: min(300px, calc(100vw - 48px));
   padding: 0;
@@ -286,6 +292,12 @@
 .dark .station-accessibility__item span,
 .dark .station-accessibility__source {
   color: #94a3b8;
+}
+.dark .train-tooltip__progress {
+  background: #334155;
+}
+.dark .train-tooltip h4 {
+  color: #cbd5e1;
 }
 .train-tooltip h3 {
   margin: 0 0 6px;
