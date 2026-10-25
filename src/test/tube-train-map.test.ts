@@ -6,6 +6,7 @@ import {
   parseOsmRailPaths,
   fetchOsmRailPaths,
   getTrainPositions,
+  groupStationMarkers,
   parseTfLRouteSequence,
   parseElizabethLineData,
   parseTubeTrackCsv,
@@ -27,6 +28,28 @@ import {
 } from "@/lib/tfl";
 
 describe("tube train map data", () => {
+  it("groups duplicate station points such as Bank into one map marker", () => {
+    const groups = groupStationMarkers([
+      { id: "bank-tube", name: "Bank", coordinates: [-0.0886, 51.5133] },
+      { id: "bank-dlr", name: "Bank", coordinates: [-0.08855, 51.51335] },
+      { id: "bank-overground", name: "Bank Station", coordinates: [-0.0885, 51.5134] },
+      { id: "monument", name: "Monument", coordinates: [-0.0858, 51.5107] },
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.stationIds).toEqual(["bank-tube", "bank-dlr", "bank-overground"]);
+    expect(groups[1]?.stationIds).toEqual(["monument"]);
+  });
+
+  it("keeps same-named stations separate when they are in different locations", () => {
+    const groups = groupStationMarkers([
+      { id: "victoria-london", name: "Victoria", coordinates: [-0.1439, 51.4965] },
+      { id: "victoria-manchester", name: "Victoria", coordinates: [-2.2426, 53.4875] },
+    ]);
+
+    expect(groups).toHaveLength(2);
+  });
+
   it("parses detailed OSM rail paths without simplifying their rail vertices", () => {
     const paths = parseOsmRailPaths(
       {

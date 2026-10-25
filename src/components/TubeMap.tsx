@@ -10,6 +10,7 @@ import {
   fetchTfLRouteData,
   fetchTrainActions,
   fetchTubeMapData,
+  groupStationMarkers,
   getTrackEndpointConnectors,
   getElizabethLineTrainPositions,
   getLineTrainPositions,
@@ -399,8 +400,10 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             stationLines.set(stationId, lines);
           }
         }
-        const stationLinesHtml = (stationId: string) => {
-          const lines = [...(stationLines.get(stationId) ?? [])].sort();
+        const stationLinesHtml = (stationIds: string[]) => {
+          const lines = [
+            ...new Set(stationIds.flatMap((stationId) => [...(stationLines.get(stationId) ?? [])])),
+          ].sort();
           if (lines.length === 0) {
             return '<p class="station-accessibility__empty">Line information is not available.</p>';
           }
@@ -534,22 +537,24 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           },
         });
 
+        const stationMarkerGroups = groupStationMarkers(stations);
+        const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => ({
+          type: "Feature" as const,
+          geometry: { type: "Point" as const, coordinates: group.station.coordinates },
+          properties: {
+            id: group.station.id,
+            name: group.station.name,
+            linesHtml: stationLinesHtml(group.stationIds),
+            html: `<strong>${escapeHtml(group.station.name)}</strong>`,
+          },
+        });
         map.addSource("stations", {
           type: "geojson",
           data: {
             type: "FeatureCollection",
-            features: stations
-              .filter((station) => !overgroundStationIds.has(station.id))
-              .map((station) => ({
-                type: "Feature" as const,
-                geometry: { type: "Point" as const, coordinates: station.coordinates },
-                properties: {
-                  id: station.id,
-                  name: station.name,
-                  linesHtml: stationLinesHtml(station.id),
-                  html: `<strong>${escapeHtml(station.name)}</strong>`,
-                },
-              })),
+            features: stationMarkerGroups
+              .filter((group) => !group.stationIds.every((id) => overgroundStationIds.has(id)))
+              .map(createStationMarkerFeature),
           },
         });
         map.addLayer({
@@ -569,18 +574,9 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           type: "geojson",
           data: {
             type: "FeatureCollection",
-            features: stations
-              .filter((station) => overgroundStationIds.has(station.id))
-              .map((station) => ({
-                type: "Feature" as const,
-                geometry: { type: "Point" as const, coordinates: station.coordinates },
-                properties: {
-                  id: station.id,
-                  name: station.name,
-                  linesHtml: stationLinesHtml(station.id),
-                  html: `<strong>${escapeHtml(station.name)}</strong>`,
-                },
-              })),
+            features: stationMarkerGroups
+              .filter((group) => group.stationIds.every((id) => overgroundStationIds.has(id)))
+              .map(createStationMarkerFeature),
           },
         });
         map.addLayer({

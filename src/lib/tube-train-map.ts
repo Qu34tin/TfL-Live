@@ -9,6 +9,46 @@ export type TubeStation = {
   coordinates: Coordinate;
 };
 
+export type StationMarkerGroup = {
+  station: TubeStation;
+  stationIds: string[];
+};
+
+function stationDistanceMeters(a: Coordinate, b: Coordinate): number {
+  const latitude = ((a[1] + b[1]) / 2) * (Math.PI / 180);
+  const x = (a[0] - b[0]) * Math.cos(latitude) * 111_320;
+  const y = (a[1] - b[1]) * 111_320;
+  return Math.hypot(x, y);
+}
+
+export function groupStationMarkers(stations: TubeStation[]): StationMarkerGroup[] {
+  const groups: StationMarkerGroup[] = [];
+  const groupByStationId = new Map<string, StationMarkerGroup>();
+
+  for (const station of stations) {
+    const existingIdGroup = groupByStationId.get(station.id);
+    if (existingIdGroup) continue;
+
+    const normalizedName = normalizeStationName(station.name);
+    const group = groups.find(
+      (candidate) =>
+        normalizeStationName(candidate.station.name) === normalizedName &&
+        stationDistanceMeters(candidate.station.coordinates, station.coordinates) <= 100,
+    );
+
+    if (group) {
+      group.stationIds.push(station.id);
+      groupByStationId.set(station.id, group);
+    } else {
+      const newGroup = { station, stationIds: [station.id] };
+      groups.push(newGroup);
+      groupByStationId.set(station.id, newGroup);
+    }
+  }
+
+  return groups;
+}
+
 export type TrackSegment = {
   lineId: string;
   fromStationId: string;
