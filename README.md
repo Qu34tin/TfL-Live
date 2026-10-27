@@ -118,4 +118,8 @@ Transport for London names, logos, and other relevant trademarks belong to their
 
 [⬆ Back to Top](#-tfl-live)
 
+<<<<<<< HEAD
 </div>
+=======
+</div>
+>>>>>>> e05ff47 (Improve hover UI and live train popups)

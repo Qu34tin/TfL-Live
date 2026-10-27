@@ -177,6 +177,8 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             geometry: { type: "Point" as const, coordinates },
             properties: {
               color,
+              lineId: train.lineId,
+              trainId: train.trainId,
               html: buildTrainTooltipHtml(train, stationNames),
             },
           };
@@ -213,6 +215,8 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           },
           properties: {
             color: LINE_COLOURS[train.lineId] ?? "#ffffff",
+            lineId: train.lineId,
+            trainId: train.trainId,
             html: buildTrainTooltipHtml(train, stationNames),
           },
         })),
@@ -247,6 +251,8 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           },
           properties: {
             color: LINE_COLOURS[train.lineId] ?? "#ffffff",
+            lineId: train.lineId,
+            trainId: train.trainId,
             html: buildTrainTooltipHtml(train, stationNames),
           },
         })),
@@ -270,6 +276,8 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           geometry: { type: "Point" as const, coordinates: train.coordinates },
           properties: {
             color: LINE_COLOURS[train.lineId] ?? "#666",
+            lineId: train.lineId,
+            trainId: train.trainId,
             html: buildTrainTooltipHtml(train, stationNames),
           },
         })),
@@ -360,7 +368,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           }
           let overgroundPaths = routeData.segments.map(({ path }) => path);
           try {
-            const railPaths = await fetchOsmRailPaths(route.lineId);
+            const railPaths = await fetchOsmRailPaths(route.lineId as any);
             if (cancelled) return;
             if (railPaths.length > 0) {
               railPathsByLine.set(route.lineId, railPaths);
@@ -434,7 +442,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             features: displayedLinePaths.map((linePath) => ({
               type: "Feature" as const,
               geometry: { type: "LineString" as const, coordinates: linePath.path },
-              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff" },
+              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff", lineId: linePath.lineId },
             })),
           },
         });
@@ -468,7 +476,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             features: elizabethSegments.map((segment) => ({
               type: "Feature" as const,
               geometry: { type: "LineString" as const, coordinates: segment.path },
-              properties: { color: LINE_COLOURS["elizabeth"] },
+              properties: { color: LINE_COLOURS["elizabeth"], lineId: "elizabeth" },
             })),
           },
         });
@@ -502,7 +510,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
             features: overgroundLinePaths.map((linePath) => ({
               type: "Feature" as const,
               geometry: { type: "LineString" as const, coordinates: linePath.path },
-              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff" },
+              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff", lineId: linePath.lineId },
             })),
           },
         });
@@ -720,21 +728,26 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
           if (hoveredTrainHtml !== html) {
             popup.setHTML(html);
             hoveredTrainHtml = html;
+            popup.setLngLat(map.unproject(hoveredTrainPoint)).addTo(map);
+          } else if (hoveredTrainPoint) {
+            popup.setLngLat(map.unproject(hoveredTrainPoint)).addTo(map);
           }
-          popup.setLngLat(map.unproject(hoveredTrainPoint)).addTo(map);
         };
         map.on("render", updateHoveredTrainPopup);
         map.on("mousemove", (event: maplibregl.MapMouseEvent) => {
           const features = map.queryRenderedFeatures(event.point, {
-            layers: [...trainLayerIds, "stations", "overground-stations"],
+            layers: ["stations", "overground-stations", ...trainLayerIds, "tube-lines", "elizabeth-line", "overground-lines"],
           });
           const feature =
+            features.find((candidate) => candidate.layer.id === "stations") ??
+            features.find((candidate) => candidate.layer.id === "overground-stations") ??
             features.find((candidate) => candidate.layer.id === "trains") ??
             features.find((candidate) => candidate.layer.id === "elizabeth-trains") ??
             features.find((candidate) => candidate.layer.id === "overground-trains") ??
             features.find((candidate) => candidate.layer.id === "line-trains") ??
-            features.find((candidate) => candidate.layer.id === "stations") ??
-            features.find((candidate) => candidate.layer.id === "overground-stations");
+            features.find((candidate) => candidate.layer.id === "tube-lines") ??
+            features.find((candidate) => candidate.layer.id === "elizabeth-line") ??
+            features.find((candidate) => candidate.layer.id === "overground-lines");
           if (!feature) {
             hoveredTrainPoint = null;
             hoveredTrainHtml = "";
@@ -750,7 +763,23 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
               popup.remove();
               return;
             }
-            popup.setLngLat(event.lngLat).setHTML(String(feature.properties["html"])).addTo(map);
+            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip"><h3>${escapeHtml(String(feature.properties["name"]))}</h3></article>`).addTo(map);
+            return;
+          }
+          if (feature.layer.id === "tube-lines" || feature.layer.id === "elizabeth-line" || feature.layer.id === "overground-lines") {
+            hoveredTrainPoint = null;
+            hoveredTrainHtml = "";
+            if (stationPopup.isOpen()) {
+              popup.remove();
+              return;
+            }
+            const lineId = feature.properties["lineId"] || feature.properties["color"];
+            const lineName = lineId
+              .toString()
+              .split("-")
+              .map((part: string) => part[0]?.toUpperCase() + part.slice(1))
+              .join(" & ");
+            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip"><h3>${escapeHtml(lineName)}${lineName.includes("line") ? "" : " line"}</h3></article>`).addTo(map);
             return;
           }
           hoveredTrainPoint = [event.point.x, event.point.y];

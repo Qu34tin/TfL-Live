@@ -47,5 +47,7 @@ export function buildTrainTooltipHtml(
     )
     .join("");
 
+  const speedKmh = train.progressPercent === 0 ? 0 : Math.round((20 + train.progressPercent * 0.15) * 10) / 10;
+
   return `<article class="train-tooltip"><h3 style="color:${color}">${escapeHtml(formatLineName(train.lineId))} Train ${escapeHtml(train.trainId)}</h3><p><strong>From:</strong> ${escapeHtml(fromName)}</p><p><strong>To:</strong> ${escapeHtml(toName)}</p><p><strong>Progress:</strong> ${train.progressPercent.toFixed(1)}%</p><div class="train-tooltip__progress"><span style="width:${train.progressPercent}%;background:${color}"></span></div>${futureStops ? `<h4>Future Stops:</h4><ul>${futureStops}</ul>` : ""}</article>`;
 }
