@@ -67,22 +67,25 @@ function MapPage() {
               type="button"
               onClick={() => setOvergroundEnabled((current) => !current)}
               aria-pressed={overgroundEnabled}
-              aria-label={overgroundEnabled ? "Hide Overground lines" : "Show Overground lines"}
-              title={overgroundEnabled ? "Hide Overground lines" : "Show Overground lines"}
-              className={`inline-flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc72c] ${
+              aria-label={overgroundEnabled ? "Hide London Overground lines" : "Show London Overground lines"}
+              className={`group relative inline-flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc72c] ${
                 overgroundEnabled
                   ? "border-[#ffc72c] bg-[#ffc72c] text-neutral-900"
                   : "border-white/80 bg-white/95 text-neutral-900 hover:bg-amber-50 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
               }`}
             >
               <TrainFront size={18} aria-hidden="true" />
+              <span className="pointer-events-none absolute right-full mr-2 hidden whitespace-nowrap rounded-lg border border-white/80 bg-white/95 px-2 py-1 text-xs font-medium text-neutral-900 shadow-lg backdrop-blur group-hover:block dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100">
+                {overgroundEnabled ? "Hide London Overground lines" : "Show London Overground lines"}
+              </span>
             </button>
           )}
           <button
             type="button"
             onClick={() => setBusMode((current) => !current)}
             aria-label={busMode ? "Switch to Tube mode" : "Switch to bus mode"}
-            className="group inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/80 bg-white/95 text-neutral-900 shadow-lg backdrop-blur transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-red-950"
+            className="group hidden h-11 w-11 items-center justify-center rounded-lg border border-white/80 bg-white/95 text-neutral-900 shadow-lg backdrop-blur transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-red-950"
+            style={{ display: "none" }}
           >
             {busMode ? (
               <TrainFront size={20} aria-hidden="true" />
