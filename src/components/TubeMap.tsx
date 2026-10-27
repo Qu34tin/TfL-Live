@@ -546,16 +546,27 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
         });
 
         const stationMarkerGroups = groupStationMarkers(stations);
-        const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => ({
-          type: "Feature" as const,
-          geometry: { type: "Point" as const, coordinates: group.station.coordinates },
-          properties: {
-            id: group.station.id,
-            name: group.station.name,
-            linesHtml: stationLinesHtml(group.stationIds),
-            html: `<strong>${escapeHtml(group.station.name)}</strong>`,
-          },
-        });
+        const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => {
+          const allLines = new Set<string>();
+          for (const sid of group.stationIds) {
+            const lines = stationLines.get(sid);
+            if (lines) {
+              for (const lineId of lines) allLines.add(lineId);
+            }
+          }
+          return {
+            type: "Feature" as const,
+            geometry: { type: "Point" as const, coordinates: group.station.coordinates },
+            properties: {
+              id: group.station.id,
+              name: group.station.name,
+              linesHtml: stationLinesHtml(group.stationIds),
+              html: `<strong>${escapeHtml(group.station.name)}</strong>`,
+              interchange: allLines.size >= 2,
+              lineCount: allLines.size,
+            },
+          };
+        };
         map.addSource("stations", {
           type: "geojson",
           data: {
