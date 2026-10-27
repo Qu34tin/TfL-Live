@@ -38,16 +38,14 @@ export function buildTrainTooltipHtml(
   now = new Date(),
 ): string {
   const color = LINE_COLOURS[train.lineId] ?? "#ffffff";
-  const fromName = stationNames.get(train.fromStationId) ?? train.fromStationId;
-  const toName = stationNames.get(train.toStationId) ?? train.toStationId;
+  const fromName = train.routeStartStationId ? (stationNames.get(train.routeStartStationId) ?? train.routeStartStationId) : (stationNames.get(train.fromStationId) ?? train.fromStationId);
+  const toName = train.routeEndStationId ? (stationNames.get(train.routeEndStationId) ?? train.routeEndStationId) : (stationNames.get(train.toStationId) ?? train.toStationId);
   const futureStops = train.futureStops
     .map(
       (stop) =>
         `<li><time>${formatTrainTime(stop.arrivalTimestamp, now)}</time> – ${escapeHtml(stop.stationName)}</li>`,
     )
     .join("");
-
-  const speedKmh = train.progressPercent === 0 ? 0 : Math.round((20 + train.progressPercent * 0.15) * 10) / 10;
 
   return `<article class="train-tooltip"><h3 style="color:${color}">${escapeHtml(formatLineName(train.lineId))} Train ${escapeHtml(train.trainId)}</h3><p><strong>From:</strong> ${escapeHtml(fromName)}</p><p><strong>To:</strong> ${escapeHtml(toName)}</p><p><strong>Progress:</strong> ${train.progressPercent.toFixed(1)}%</p><div class="train-tooltip__progress"><span style="width:${train.progressPercent}%;background:${color}"></span></div>${futureStops ? `<h4>Future Stops:</h4><ul>${futureStops}</ul>` : ""}</article>`;
 }

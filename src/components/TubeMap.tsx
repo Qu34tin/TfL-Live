@@ -763,7 +763,52 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
               popup.remove();
               return;
             }
-            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip"><h3>${escapeHtml(String(feature.properties["name"]))}</h3></article>`).addTo(map);
+            const stationIds = (() => {
+              try {
+                const mapData = (window as any).__stationGroups;
+                return null;
+              } catch {
+                return null;
+              }
+            })();
+            const linesSet = new Set<string>();
+            for (const segment of [...segments, ...elizabethSegments, ...overgroundSegments]) {
+              const stationId = String(feature.properties["id"]);
+              if (segment.fromStationId === stationId || segment.toStationId === stationId) {
+                linesSet.add(segment.lineId);
+              }
+            }
+            const lineOrder = ["bakerloo", "central", "circle", "district", "hammersmith-city", "jubilee", "metropolitan", "northern", "piccadilly", "victoria", "waterloo-city", "elizabeth", "dlr", "tram", "liberty", "lioness", "mildmay", "suffragette", "weaver", "windrush"];
+            const labels: Record<string, string> = {
+              "hammersmith-city": "Hammersmith & City",
+              dlr: "DLR",
+              tram: "Tram",
+              metropolitan: "Metropolitan",
+              piccadilly: "Piccadilly",
+              bakerloo: "Bakerloo",
+              central: "Central",
+              circle: "Circle",
+              district: "District",
+              jubilee: "Jubilee",
+              northern: "Northern",
+              victoria: "Victoria",
+              "waterloo-city": "Waterloo & City",
+              elizabeth: "Elizabeth",
+              liberty: "Liberty",
+              lioness: "Lioness",
+              mildmay: "Mildmay",
+              suffragette: "Suffragette",
+              weaver: "Weaver",
+              windrush: "Windrush",
+            };
+            const sortedLines = [...linesSet].sort((a, b) => lineOrder.indexOf(a) - lineOrder.indexOf(b));
+            const lineBars = sortedLines.map((lineId) => {
+              const color = LINE_COLOURS[lineId] ?? "#64748b";
+              const label = labels[lineId] ?? lineId.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+              const textColor = ["circle", "lioness", "suffragette"].includes(lineId) ? "#1f2937" : "#ffffff";
+              return `<span style="display:inline-flex;align-items:center;padding:1px 4px;border-radius:2px;background:${color};color:${textColor};font-size:10px;white-space:nowrap;">${escapeHtml(label)}</span>`;
+            }).join('');
+            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip" style="padding:6px 8px;"><div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;"><span style="font-size:12px;font-weight:600;">${escapeHtml(String(feature.properties["name"]))}</span><div style="display:flex;gap:2px;flex-wrap:wrap;align-items:center;">${lineBars}</div></div></article>`).addTo(map);
             return;
           }
           if (feature.layer.id === "tube-lines" || feature.layer.id === "elizabeth-line" || feature.layer.id === "overground-lines") {

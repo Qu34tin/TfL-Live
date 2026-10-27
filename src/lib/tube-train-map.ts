@@ -117,6 +117,8 @@ export type TrainPosition = {
   toStationId: string;
   progressPercent: number;
   futureStops: { stationName: string; arrivalTimestamp: number }[];
+  routeStartStationId?: string;
+  routeEndStationId?: string;
 };
 
 export type RawStation = {
@@ -808,6 +810,8 @@ export function getTrainPositions(
             arrivalTimestamp: futureAction.to_timestamp,
           });
         }
+        const firstAction = (trainActions[lineId]?.[trainId] as TrainAction[] | undefined)?.[0];
+        const lastAction = (trainActions[lineId]?.[trainId] as TrainAction[] | undefined)?.slice(-1)[0];
         positions.push({
           lineId,
           trainId,
@@ -816,6 +820,8 @@ export function getTrainPositions(
           toStationId: to_stop_id,
           progressPercent: progress * 100,
           futureStops,
+          routeStartStationId: firstAction?.from_stop_id,
+          routeEndStationId: lastAction?.to_stop_id,
         });
       }
     }
@@ -986,6 +992,9 @@ export function getLineTrainPositions(
     position ??= furthestPosition;
     if (!position) continue;
 
+    const firstPrediction = [...predictions.entries()].sort(([, a], [, b]) => b.arrival.timeToStation - a.arrival.timeToStation)[predictions.size - 1];
+    const routeStartStationId = firstPrediction?.[0] || position.fromStationId;
+    const routeEndStationId = destination?.id || toStationId;
     positions.push({
       lineId,
       trainId,
@@ -999,6 +1008,8 @@ export function getLineTrainPositions(
           arrivalTimestamp: timestampSeconds + arrival.timeToStation,
         },
       ],
+      routeStartStationId,
+      routeEndStationId,
     });
   }
 
