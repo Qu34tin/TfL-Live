@@ -31,3 +31,5 @@ dist-ssr
 *.sln
 *.sw?
 .lovable/project.json
+
+push-to-github.bat
