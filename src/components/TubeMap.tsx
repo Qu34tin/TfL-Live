@@ -34,10 +34,11 @@ import {
   type LineArrival,
 } from "@/lib/tfl";
 
-export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: boolean }) {
+export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { overgroundEnabled: boolean; stationQuery?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overgroundEnabledRef = useRef(overgroundEnabled);
+  const stationGroupsRef = useRef<any[]>([]);
   const cameraRef = useRef<{
     center: [number, number];
     zoom: number;
@@ -48,6 +49,22 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
   const [isDark, setIsDark] = useState(
     () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
   );
+
+  useEffect(() => {
+    if (!stationQuery.trim() || !mapRef.current) {
+      if (!stationQuery.trim() && cameraRef.current && mapRef.current) {
+        mapRef.current.flyTo({ center: cameraRef.current.center, zoom: cameraRef.current.zoom, pitch: cameraRef.current.pitch, bearing: cameraRef.current.bearing, duration: 1000 });
+      }
+      return;
+    }
+    const q = stationQuery.toLowerCase().trim();
+    for (const g of stationGroupsRef.current) {
+      if (g.station?.name?.toLowerCase().includes(q)) {
+        mapRef.current.flyTo({ center: g.station.coordinates, zoom: 16, duration: 1200 });
+        break;
+      }
+    }
+  }, [stationQuery]);
 
   useEffect(() => {
     const themeObserver = new MutationObserver(() => {
@@ -546,6 +563,7 @@ export default function TubeMap({ overgroundEnabled }: { overgroundEnabled: bool
         });
 
         const stationMarkerGroups = groupStationMarkers(stations);
+        stationGroupsRef.current = stationMarkerGroups;
         const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => {
           const allLines = new Set<string>();
           for (const sid of group.stationIds) {

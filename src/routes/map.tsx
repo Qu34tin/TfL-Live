@@ -1,7 +1,8 @@
 import { createFileRoute, ClientOnly } from "@tanstack/react-router";
-import { BusFront, TrainFront } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { BusFront, Search, TrainFront, X } from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
+import { fetchAllStations } from "@/lib/tfl";
 
 const TubeMap = lazy(() => import("@/components/TubeMap"));
 const BusMap = lazy(() => import("@/components/BusMap"));
@@ -29,11 +30,60 @@ export const Route = createFileRoute("/map")({
 function MapPage() {
   const [busMode, setBusMode] = useState(false);
   const [overgroundEnabled, setOvergroundEnabled] = useState(false);
+  const [stationQuery, setStationQuery] = useState("");
+  const [stations, setStations] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  useEffect(() => {
+    fetchAllStations().then(setStations).catch(() => {});
+  }, []);
+
+  const suggestions = useMemo(() => {
+    if (!stationQuery.trim()) return [];
+    const q = stationQuery.toLowerCase().trim();
+    return stations.filter((s: any) => s.name?.toLowerCase().includes(q)).slice(0, 8);
+  }, [stationQuery, stations]);
 
   return (
     <div className="flex h-screen flex-col bg-background">
       <SiteHeader />
       <main className="relative mx-3 mb-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/20 bg-[#f2f1eb] dark:border-neutral-700 dark:bg-[#111820] sm:mx-6">
+        {!busMode && (
+          <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
+            <div className="relative">
+              <div className="flex items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
+                <Search size={16} className="text-muted-foreground" />
+                <input
+                  value={stationQuery}
+                  onChange={(e) => {
+                    setStationQuery(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  placeholder="Search for a station"
+                  className="w-56 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                />
+                {stationQuery && <button onClick={() => setStationQuery("")}><X size={14} className="text-muted-foreground" /></button>}
+              </div>
+              {showSuggestions && suggestions.length > 0 && (
+                <ul className="absolute z-10 mt-2 w-full overflow-hidden rounded-xl border border-border bg-popover shadow-2xl">
+                  {suggestions.map((s: any) => {
+                    const lineColors: Record<string, string> = { bakerloo:"#B36305", central:"#DC241F", circle:"#FFD329", district:"#00782A", "hammersmith-city":"#F4A9BE", jubilee:"#A0A5A9", metropolitan:"#9B0058", northern:"#000000", piccadilly:"#0019A8", victoria:"#00A0E2", "waterloo-city":"#76D0BD", elizabeth:"#7156A5", dlr:"#00AFAD", tram:"#66CC00", liberty:"#5D5D5B", lioness:"#FAA61A", mildmay:"#0072BC", suffragette:"#78C679", weaver:"#894E24", windrush:"#DC241F" };
+                    return (
+                      <li key={s.id}>
+                        <button onMouseDown={(e)=>{e.preventDefault();setStationQuery(s.name);setShowSuggestions(false);}} className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left hover:bg-secondary">
+                          <span>{s.name}</span>
+                          <span className="flex gap-1">{(s.lines||[]).slice(0,4).map((l:string)=><span key={l} className="h-2.5 w-2.5 rounded-full" style={{background:lineColors[l]}}/>)}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
         <ClientOnly
           fallback={
             <div className="absolute inset-0 animate-pulse bg-[#f2f1eb] dark:bg-[#111820]" />
@@ -44,7 +94,7 @@ function MapPage() {
               <div className="absolute inset-0 animate-pulse bg-[#f2f1eb] dark:bg-[#111820]" />
             }
           >
-            {busMode ? <BusMap /> : <TubeMap overgroundEnabled={overgroundEnabled} />}
+            {busMode ? <BusMap /> : <TubeMap overgroundEnabled={overgroundEnabled} stationQuery={stationQuery} />}
           </Suspense>
         </ClientOnly>
         {!busMode && (

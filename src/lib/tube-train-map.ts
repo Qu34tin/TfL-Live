@@ -810,9 +810,16 @@ export function getTrainPositions(
             arrivalTimestamp: futureAction.to_timestamp,
           });
         }
-        const firstAction = (trainActions[lineId]?.[trainId] as TrainAction[] | undefined)?.[0];
-        const lastAction = (trainActions[lineId]?.[trainId] as TrainAction[] | undefined)?.slice(-1)[0];
-        positions.push({
+        const trainActionsForLine: any = (trainActions as any)[lineId];
+        const trainActionListAny: any = trainActionsForLine ? trainActionsForLine[trainId] : undefined;
+        const list: any[] = Array.isArray(trainActionListAny) ? trainActionListAny : [];
+        let firstAction: any;
+        let lastAction: any;
+        if (list.length > 0) {
+          firstAction = list[0];
+          lastAction = list[0];
+        }
+        const position: TrainPosition = {
           lineId,
           trainId,
           coordinates: interpolatePath(path, progress),
@@ -820,9 +827,10 @@ export function getTrainPositions(
           toStationId: to_stop_id,
           progressPercent: progress * 100,
           futureStops,
-          routeStartStationId: firstAction?.from_stop_id,
-          routeEndStationId: lastAction?.to_stop_id,
-        });
+        };
+        if (firstAction?.from_stop_id) position.routeStartStationId = firstAction.from_stop_id;
+        if (lastAction?.to_stop_id) position.routeEndStationId = lastAction.to_stop_id;
+        positions.push(position);
       }
     }
   }
