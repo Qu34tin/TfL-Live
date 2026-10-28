@@ -813,12 +813,8 @@ export function getTrainPositions(
         const trainActionsForLine: any = (trainActions as any)[lineId];
         const trainActionListAny: any = trainActionsForLine ? trainActionsForLine[trainId] : undefined;
         const list: any[] = Array.isArray(trainActionListAny) ? trainActionListAny : [];
-        let firstAction: any;
-        let lastAction: any;
-        if (list.length > 0) {
-          firstAction = list[0];
-          lastAction = list[0];
-        }
+        let firstAction: any = list.length > 0 ? list[0] : undefined;
+        let lastAction: any = list.length > 0 ? list[list.length - 1] : undefined;
         const position: TrainPosition = {
           lineId,
           trainId,

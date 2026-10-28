@@ -51,21 +51,11 @@ function MapPage() {
         {!busMode && (
           <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
             <div className="relative">
-              <div className="flex items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 py-1.5 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
+              <div className="flex items-center gap-2 rounded-full border border-dashed border-neutral-400 bg-white/60 px-3 py-1.5 shadow-lg backdrop-blur dark:border-neutral-600 dark:bg-[#192126]/60">
                 <Search size={16} className="text-muted-foreground" />
-                <input
-                  value={stationQuery}
-                  onChange={(e) => {
-                    setStationQuery(e.target.value);
-                    setShowSuggestions(true);
-                  }}
-                  onFocus={() => setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                  placeholder="Search for a station"
-                  className="w-56 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-                {stationQuery && <button onClick={() => setStationQuery("")}><X size={14} className="text-muted-foreground" /></button>}
+                <div className="w-56 text-sm text-muted-foreground">Station search coming soon</div>
               </div>
+              <div className="mt-1 text-center text-[9px] font-mono uppercase tracking-[0.3em] text-amber-600 dark:text-amber-400">Under construction</div>
               {showSuggestions && suggestions.length > 0 && (
                 <ul className="absolute z-10 mt-2 w-full overflow-hidden rounded-xl border border-border bg-popover shadow-2xl">
                   {suggestions.map((s: any) => {

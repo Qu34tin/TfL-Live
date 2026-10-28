@@ -112,10 +112,12 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
       container: ref.current,
       style: createMapTilerStyle(apiKey, isDark),
       center: camera?.center ?? [-0.118092, 51.509865],
-      zoom: camera?.zoom ?? 14,
+      zoom: camera?.zoom ?? 8.4,
       pitch: camera?.pitch ?? 50,
       bearing: camera?.bearing ?? 0,
       maxPitch: 75,
+      minZoom: 9,
+      maxZoom: 17,
       attributionControl: { compact: true },
     });
     mapRef.current = map;
