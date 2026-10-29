@@ -157,7 +157,11 @@ export async function fetchStationAccessibility(
 }
 
 export function cleanName(n: string) {
-  return n.replace(/ (?:Underground|Rail) Station$/, "").replace(/ \(.*?\)$/, "");
+  return n
+    .replace(/ (?:Underground|Rail) Station$/, "")
+    .replace(/ Station$/, "")
+    .replace(/ \(.*?\)$/, "")
+    .trim();
 }
 
 export async function fetchAllStations(): Promise<Station[]> {
@@ -191,7 +195,20 @@ export async function fetchAllStations(): Promise<Station[]> {
         lines: [s.line],
       });
   }
-  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  // Merge stations that share a cleaned name across different naptanIds
+  // (e.g. tube "Bond Street" and Elizabeth line "Bond Street")
+  const byName = new Map<string, Station>();
+  for (const s of map.values()) {
+    const ex = byName.get(s.name);
+    if (ex) {
+      for (const line of s.lines) {
+        if (!ex.lines.includes(line)) ex.lines.push(line);
+      }
+    } else {
+      byName.set(s.name, { ...s });
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function fetchLineGeometry(line: string): Promise<number[][][]> {

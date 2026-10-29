@@ -10,7 +10,9 @@ import {
   fetchStationAccessibility,
   LINE_COLOURS,
   minutes,
+  OVERGROUND_LINE_IDS,
   STATIONS,
+  TUBE_LINES,
 } from "@/lib/tfl";
 
 export const Route = createFileRoute("/boards")({
@@ -43,6 +45,17 @@ function Boards() {
     queryFn: fetchAllStations,
     staleTime: Infinity,
   });
+  const tubeLineIds = TUBE_LINES.filter((l) => l !== "dlr" && l !== "tram" && l !== "elizabeth");
+  const overgroundSet = new Set<string>(OVERGROUND_LINE_IDS);
+  const counts = useMemo(() => {
+    if (!allStations) return { tube: 0, elizabeth: 0, overground: 0, dlr: 0 };
+    return {
+      tube: allStations.filter((s) => s.lines.some((l) => tubeLineIds.includes(l))).length,
+      elizabeth: allStations.filter((s) => s.lines.includes("elizabeth")).length,
+      overground: allStations.filter((s) => s.lines.some((l) => overgroundSet.has(l))).length,
+      dlr: allStations.filter((s) => s.lines.includes("dlr")).length,
+    };
+  }, [allStations]);
   const results = useMemo(() => {
     const t = q.trim().toLowerCase();
     if (!t || !allStations) return [];
@@ -84,6 +97,16 @@ function Boards() {
     setOpen(false);
   };
 
+  const chipStations = useMemo(() => {
+    const seen = new Set<string>();
+    return STATIONS.filter((s) => {
+      const clean = cleanName(s.name);
+      if (seen.has(clean)) return false;
+      seen.add(clean);
+      return true;
+    });
+  }, []);
+
   return (
     <div className="h-screen overflow-y-auto hide-scrollbar">
       <SiteHeader />
@@ -91,10 +114,13 @@ function Boards() {
         <h1 className="font-display text-4xl font-extrabold tracking-tight md:text-5xl">
           Departure boards
         </h1>
-        <p className="mt-3 text-muted-foreground">
-          Search any of {allStations ? allStations.length : "270+"} Tube and Elizabeth line
-          stations. Boards refresh every 20 seconds.
-        </p>
+          <p className="mt-3 text-muted-foreground">
+            Search any of{" "}
+            {allStations
+              ? `${counts.tube} tube, ${counts.elizabeth} Elizabeth line, ${counts.overground} overground, ${counts.dlr} DLR`
+              : "270+"}
+            stations. Boards refresh every 20 seconds.
+          </p>
 
         <div className="relative mt-8 max-w-xl">
           <input
@@ -143,7 +169,7 @@ function Boards() {
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          {STATIONS.map((s) => (
+          {chipStations.slice(0, 6).map((s) => (
             <button
               key={s.id}
               onClick={() => pick(s)}
@@ -153,7 +179,7 @@ function Boards() {
                   : "border-border bg-card text-muted-foreground hover:text-foreground"
               }`}
             >
-              {s.name}
+              {cleanName(s.name)}
             </button>
           ))}
         </div>
