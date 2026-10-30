@@ -85,6 +85,19 @@ export async function fetchArrivals(stopId: string): Promise<Arrival[]> {
   return data.sort((a, b) => a.timeToStation - b.timeToStation);
 }
 
+export async function fetchStationArrivals(stopIds: string[]): Promise<Arrival[]> {
+  const results = await Promise.allSettled(stopIds.map((stopId) => fetchArrivals(stopId)));
+  const fulfilled = results.filter(
+    (result): result is PromiseFulfilledResult<Arrival[]> => result.status === "fulfilled",
+  );
+  if (fulfilled.length === 0) throw new Error("Arrivals feed unavailable");
+  const seen = new Set<string>();
+  return fulfilled
+    .flatMap((result) => result.value)
+    .filter((arrival) => !seen.has(arrival.id) && seen.add(arrival.id))
+    .sort((a, b) => a.timeToStation - b.timeToStation);
+}
+
 export const STATIONS = [
   { id: "910GPADTON", name: "Paddington (Elizabeth line)" },
   { id: "910GBONDST", name: "Bond Street (Elizabeth line)" },
@@ -115,7 +128,14 @@ export const TUBE_LINES = Object.keys(LINE_COLOURS).filter(
 );
 const BOARD_LINES = Object.keys(LINE_COLOURS);
 
-export type Station = { id: string; name: string; lat: number; lon: number; lines: string[] };
+export type Station = {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  lines: string[];
+  stopIds: string[];
+};
 
 export type StationAccessibilityItem = { label: string; value: string };
 
@@ -193,6 +213,7 @@ export async function fetchAllStations(): Promise<Station[]> {
         lat: s.lat,
         lon: s.lon,
         lines: [s.line],
+        stopIds: [s.naptanId],
       });
   }
   // Merge stations that share a cleaned name across different naptanIds
@@ -204,8 +225,11 @@ export async function fetchAllStations(): Promise<Station[]> {
       for (const line of s.lines) {
         if (!ex.lines.includes(line)) ex.lines.push(line);
       }
+      for (const stopId of s.stopIds) {
+        if (!ex.stopIds.includes(stopId)) ex.stopIds.push(stopId);
+      }
     } else {
-      byName.set(s.name, { ...s });
+      byName.set(s.name, { ...s, lines: [...s.lines], stopIds: [...s.stopIds] });
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));

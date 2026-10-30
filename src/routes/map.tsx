@@ -2,7 +2,7 @@ import { createFileRoute, ClientOnly } from "@tanstack/react-router";
 import { BusFront, Search, TrainFront, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
-import { fetchAllStations } from "@/lib/tfl";
+import { fetchAllStations, LINE_COLOURS, type Station } from "@/lib/tfl";
 
 const TubeMap = lazy(() => import("@/components/TubeMap"));
 const BusMap = lazy(() => import("@/components/BusMap"));
@@ -30,19 +30,42 @@ export const Route = createFileRoute("/map")({
 function MapPage() {
   const [busMode, setBusMode] = useState(false);
   const [overgroundEnabled, setOvergroundEnabled] = useState(false);
-  const [stationQuery, setStationQuery] = useState("");
-  const [stations, setStations] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+  const [stations, setStations] = useState<Station[]>([]);
+  const [stationsLoading, setStationsLoading] = useState(true);
+  const [stationSearchError, setStationSearchError] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   useEffect(() => {
-    fetchAllStations().then(setStations).catch(() => {});
+    let cancelled = false;
+    fetchAllStations()
+      .then((loadedStations) => {
+        if (!cancelled) setStations(loadedStations);
+      })
+      .catch((error: unknown) => {
+        console.error("Unable to load stations for map search", error);
+        if (!cancelled) setStationSearchError("Station search is unavailable. Please try again later.");
+      })
+      .finally(() => {
+        if (!cancelled) setStationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const suggestions = useMemo(() => {
-    if (!stationQuery.trim()) return [];
-    const q = stationQuery.toLowerCase().trim();
-    return stations.filter((s: any) => s.name?.toLowerCase().includes(q)).slice(0, 8);
-  }, [stationQuery, stations]);
+    if (!searchQuery.trim()) return [];
+    const query = searchQuery.toLowerCase().trim();
+    return stations.filter((station) => station.name.toLowerCase().includes(query)).slice(0, 8);
+  }, [searchQuery, stations]);
+
+  const selectStation = (station: Station) => {
+    setSearchQuery(station.name);
+    setSelectedStation(station);
+    setShowSuggestions(false);
+  };
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -51,24 +74,86 @@ function MapPage() {
         {!busMode && (
           <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
             <div className="relative">
-              <div className="flex items-center gap-2 rounded-full border border-dashed border-neutral-400 bg-white/60 px-3 py-1.5 shadow-lg backdrop-blur dark:border-neutral-600 dark:bg-[#192126]/60">
-                <Search size={16} className="text-muted-foreground" />
-                <div className="w-56 text-sm text-muted-foreground">Station search coming soon</div>
+              <div className="flex w-[min(22rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
+                <Search size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
+                <label className="sr-only" htmlFor="map-station-search">Search for a station</label>
+                <input
+                  id="map-station-search"
+                  type="text"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={showSuggestions && Boolean(searchQuery.trim())}
+                  aria-controls="map-station-suggestions"
+                  autoComplete="off"
+                  value={searchQuery}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setShowSuggestions(false)}
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value);
+                    setSelectedStation(null);
+                    setShowSuggestions(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setShowSuggestions(false);
+                    if (event.key === "Enter" && suggestions[0]) {
+                      event.preventDefault();
+                      selectStation(suggestions[0]);
+                    }
+                  }}
+                  placeholder="Search stations"
+                  className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    aria-label="Clear station search"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSelectedStation(null);
+                      setShowSuggestions(false);
+                    }}
+                    className="rounded-full p-1 text-muted-foreground hover:bg-secondary"
+                  >
+                    <X size={15} aria-hidden="true" />
+                  </button>
+                )}
               </div>
-              <div className="mt-1 text-center text-[9px] font-mono uppercase tracking-[0.3em] text-amber-600 dark:text-amber-400">Under construction</div>
-              {showSuggestions && suggestions.length > 0 && (
-                <ul className="absolute z-10 mt-2 w-full overflow-hidden rounded-xl border border-border bg-popover shadow-2xl">
-                  {suggestions.map((s: any) => {
-                    const lineColors: Record<string, string> = { bakerloo:"#B36305", central:"#DC241F", circle:"#FFD329", district:"#00782A", "hammersmith-city":"#F4A9BE", jubilee:"#A0A5A9", metropolitan:"#9B0058", northern:"#000000", piccadilly:"#0019A8", victoria:"#00A0E2", "waterloo-city":"#76D0BD", elizabeth:"#7156A5", dlr:"#00AFAD", tram:"#66CC00", liberty:"#5D5D5B", lioness:"#FAA61A", mildmay:"#0072BC", suffragette:"#78C679", weaver:"#894E24", windrush:"#DC241F" };
-                    return (
-                      <li key={s.id}>
-                        <button onMouseDown={(e)=>{e.preventDefault();setStationQuery(s.name);setShowSuggestions(false);}} className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left hover:bg-secondary">
-                          <span>{s.name}</span>
-                          <span className="flex gap-1">{(s.lines||[]).slice(0,4).map((l:string)=><span key={l} className="h-2.5 w-2.5 rounded-full" style={{background:lineColors[l]}}/>)}</span>
-                        </button>
-                      </li>
-                    );
-                  })}
+              {showSuggestions && searchQuery.trim() && (
+                <ul
+                  id="map-station-suggestions"
+                  role="listbox"
+                  className="absolute z-10 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border border-border bg-popover py-1 shadow-2xl"
+                >
+                  {suggestions.map((station) => (
+                    <li key={station.id} role="option" aria-selected={selectedStation?.id === station.id}>
+                      <button
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectStation(station)}
+                        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
+                      >
+                        <span>{station.name}</span>
+                        <span className="flex shrink-0 gap-1" aria-label={station.lines.join(", ")}>
+                          {station.lines.slice(0, 4).map((line) => (
+                            <span
+                              key={line}
+                              aria-hidden="true"
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{ backgroundColor: LINE_COLOURS[line] ?? "#888" }}
+                            />
+                          ))}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                  {suggestions.length === 0 && (
+                    <li className="px-4 py-3 text-sm text-muted-foreground">
+                      {stationsLoading
+                        ? "Loading stations..."
+                        : stationSearchError ?? "No stations found."}
+                    </li>
+                  )}
                 </ul>
               )}
             </div>
@@ -84,7 +169,11 @@ function MapPage() {
               <div className="absolute inset-0 animate-pulse bg-[#f2f1eb] dark:bg-[#111820]" />
             }
           >
-            {busMode ? <BusMap /> : <TubeMap overgroundEnabled={overgroundEnabled} stationQuery={stationQuery} />}
+            {busMode ? (
+              <BusMap />
+            ) : (
+              <TubeMap overgroundEnabled={overgroundEnabled} selectedStation={selectedStation} />
+            )}
           </Suspense>
         </ClientOnly>
         {!busMode && (

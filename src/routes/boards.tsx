@@ -7,6 +7,7 @@ import {
   cleanName,
   fetchAllStations,
   fetchArrivals,
+  fetchStationArrivals,
   fetchStationAccessibility,
   LINE_COLOURS,
   minutes,
@@ -14,6 +15,10 @@ import {
   STATIONS,
   TUBE_LINES,
 } from "@/lib/tfl";
+
+const TUBE_AND_ELIZABETH_LINE_IDS = [...TUBE_LINES, "elizabeth"];
+
+type Stop = { id: string; name: string; stopIds?: string[] };
 
 export const Route = createFileRoute("/boards")({
   head: () => ({
@@ -36,7 +41,9 @@ export const Route = createFileRoute("/boards")({
 });
 
 function Boards() {
-  const [stop, setStop] = useState<{ id: string; name: string }>(STATIONS[0]!);
+  const [stop, setStop] = useState<Stop>(
+    STATIONS.find((station) => !station.name.endsWith("(Elizabeth line)")) ?? STATIONS[0]!,
+  );
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
 
@@ -45,13 +52,14 @@ function Boards() {
     queryFn: fetchAllStations,
     staleTime: Infinity,
   });
-  const tubeLineIds = TUBE_LINES.filter((l) => l !== "dlr" && l !== "tram" && l !== "elizabeth");
   const overgroundSet = new Set<string>(OVERGROUND_LINE_IDS);
   const counts = useMemo(() => {
-    if (!allStations) return { tube: 0, elizabeth: 0, overground: 0, dlr: 0 };
+    if (!allStations) return { tube: 0, overground: 0, dlr: 0 };
     return {
-      tube: allStations.filter((s) => s.lines.some((l) => tubeLineIds.includes(l))).length,
-      elizabeth: allStations.filter((s) => s.lines.includes("elizabeth")).length,
+      tube: allStations
+        .filter((station) =>
+          station.lines.some((line) => TUBE_AND_ELIZABETH_LINE_IDS.includes(line)),
+        ).length,
       overground: allStations.filter((s) => s.lines.some((l) => overgroundSet.has(l))).length,
       dlr: allStations.filter((s) => s.lines.includes("dlr")).length,
     };
@@ -69,8 +77,9 @@ function Boards() {
   }, [q, allStations]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["arrivals", stop.id],
-    queryFn: () => fetchArrivals(stop.id),
+    queryKey: ["arrivals", stop.id, stop.stopIds],
+    queryFn: () =>
+      stop.stopIds?.length ? fetchStationArrivals(stop.stopIds) : fetchArrivals(stop.id),
     refetchInterval: 20_000,
   });
 
@@ -86,26 +95,29 @@ function Boards() {
 
   const platforms = new Map<string, NonNullable<typeof data>>();
   data?.forEach((a) => {
-    const list = platforms.get(a.platformName) ?? [];
+    const key = `${a.lineId}|${a.platformName}`;
+    const list = platforms.get(key) ?? [];
     if (list.length < 4) list.push(a);
-    platforms.set(a.platformName, list);
+    platforms.set(key, list);
   });
 
-  const pick = (s: { id: string; name: string }) => {
+  const pick = (s: Stop) => {
     setStop(s);
     setQ("");
     setOpen(false);
   };
 
   const chipStations = useMemo(() => {
+    if (!allStations) return [];
     const seen = new Set<string>();
-    return STATIONS.filter((s) => {
-      const clean = cleanName(s.name);
-      if (seen.has(clean)) return false;
-      seen.add(clean);
-      return true;
+    const stationsByName = new Map(allStations.map((station) => [station.name, station]));
+    return STATIONS.flatMap((station) => {
+      const mergedStation = stationsByName.get(cleanName(station.name));
+      if (!mergedStation || seen.has(mergedStation.name)) return [];
+      seen.add(mergedStation.name);
+      return [mergedStation];
     });
-  }, []);
+  }, [allStations]);
 
   return (
     <div className="h-screen overflow-y-auto hide-scrollbar">
@@ -117,7 +129,7 @@ function Boards() {
           <p className="mt-3 text-muted-foreground">
             Search any of{" "}
             {allStations
-              ? `${counts.tube} tube, ${counts.elizabeth} Elizabeth line, ${counts.overground} overground, ${counts.dlr} DLR`
+              ? `${counts.tube} Tube and Elizabeth line, ${counts.overground} Overground, ${counts.dlr} DLR`
               : "270+"}
             stations. Boards refresh every 20 seconds.
           </p>
@@ -246,9 +258,9 @@ function Boards() {
           <p className="mt-4 text-muted-foreground">No trains due right now.</p>
         )}
         <div className="mt-6 grid gap-5 md:grid-cols-2">
-          {[...platforms.entries()].map(([platform, arrivals]) => (
+          {[...platforms.entries()].map(([key, arrivals]) => (
             <section
-              key={platform}
+              key={key}
               className="overflow-hidden rounded-xl border border-border bg-board"
             >
               <div
@@ -257,7 +269,7 @@ function Boards() {
               />
               <div className="p-5">
                 <p className="mb-3 text-xs uppercase tracking-widest text-muted-foreground">
-                  {arrivals[0]!.lineName} · {platform}
+                  {arrivals[0]!.lineName} · {arrivals[0]!.platformName}
                 </p>
                 <ol className="space-y-2">
                   {arrivals.map((a, i) => (

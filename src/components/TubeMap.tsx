@@ -3,6 +3,7 @@ import * as maplibregl from "maplibre-gl";
 import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { createMapTilerStyle } from "@/lib/maptiler-style";
+import { cleanRailPaths, prepareOverlappingLines, routeThroughRail } from "@/lib/line-offsets";
 import {
   fetchElizabethLineArrivals,
   fetchElizabethLineData,
@@ -32,13 +33,53 @@ import {
   fetchStationAccessibility,
   type StationAccessibilityItem,
   type LineArrival,
+  type Station,
 } from "@/lib/tfl";
 
-export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { overgroundEnabled: boolean; stationQuery?: string }) {
+const LINE_DISPLAY_NAMES: Record<string, string> = {
+  "hammersmith-city": "Hammersmith & City",
+  "waterloo-city": "Waterloo & City",
+  dlr: "DLR",
+  tram: "Tram",
+};
+const OVERGROUND_LINE_SET = new Set<string>(OVERGROUND_LINE_IDS);
+
+function getLineName(lineId: string) {
+  return (
+    LINE_DISPLAY_NAMES[lineId] ??
+    lineId
+      .split("-")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
+function getLineBadgeHtml(lineId: string) {
+  const color = LINE_COLOURS[lineId] ?? "#64748b";
+  const textColor = ["circle", "lioness", "suffragette"].includes(lineId) ? "#1f2937" : "#ffffff";
+  const label =
+    lineId === "dlr" || lineId === "tram" ? getLineName(lineId) : `${getLineName(lineId)} line`;
+  return `<li class="station-accessibility__line" style="--line-color:${color};--line-text-color:${textColor}">${escapeHtml(label)}</li>`;
+}
+
+function getLineMode(lineId: string) {
+  if (lineId === "elizabeth") return "Elizabeth line";
+  if (lineId === "dlr") return "Docklands Light Railway";
+  if (lineId === "tram") return "London Trams";
+  if (OVERGROUND_LINE_SET.has(lineId)) return "London Overground";
+  return "London Underground";
+}
+
+export default function TubeMap({
+  overgroundEnabled,
+  selectedStation,
+}: {
+  overgroundEnabled: boolean;
+  selectedStation: Station | null;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overgroundEnabledRef = useRef(overgroundEnabled);
-  const stationGroupsRef = useRef<any[]>([]);
   const cameraRef = useRef<{
     center: [number, number];
     zoom: number;
@@ -46,25 +87,19 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
     bearing: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isMapReady, setIsMapReady] = useState(false);
   const [isDark, setIsDark] = useState(
     () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
   );
 
   useEffect(() => {
-    if (!stationQuery.trim() || !mapRef.current) {
-      if (!stationQuery.trim() && cameraRef.current && mapRef.current) {
-        mapRef.current.flyTo({ center: cameraRef.current.center, zoom: cameraRef.current.zoom, pitch: cameraRef.current.pitch, bearing: cameraRef.current.bearing, duration: 1000 });
-      }
-      return;
-    }
-    const q = stationQuery.toLowerCase().trim();
-    for (const g of stationGroupsRef.current) {
-      if (g.station?.name?.toLowerCase().includes(q)) {
-        mapRef.current.flyTo({ center: g.station.coordinates, zoom: 16, duration: 1200 });
-        break;
-      }
-    }
-  }, [stationQuery]);
+    if (!selectedStation || !isMapReady || !mapRef.current) return;
+    mapRef.current.flyTo({
+      center: [selectedStation.lon, selectedStation.lat],
+      zoom: 16,
+      duration: 1200,
+    });
+  }, [isMapReady, selectedStation]);
 
   useEffect(() => {
     const themeObserver = new MutationObserver(() => {
@@ -112,7 +147,7 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
       container: ref.current,
       style: createMapTilerStyle(apiKey, isDark),
       center: camera?.center ?? [-0.118092, 51.509865],
-      zoom: camera?.zoom ?? 8.4,
+      zoom: camera?.zoom ?? 11,
       pitch: camera?.pitch ?? 50,
       bearing: camera?.bearing ?? 0,
       maxPitch: 75,
@@ -309,12 +344,43 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
     let stationNames = new Map<string, string>();
 
     const handleMapLoad = async () => {
+      setIsMapReady(true);
       try {
         const mapData = await fetchTubeMapData();
         if (cancelled) return;
         stations = mapData.stations;
         segments = mapData.segments;
         displayedLinePaths = mapData.segments.map(({ lineId, path }) => ({ lineId, path }));
+        // The Piccadilly shares the District track between Hammersmith and Acton Town, but the map data has no segment there.
+        {
+          const district = mapData.segments.filter((segment) => segment.lineId === "district");
+          const walk = (from: string, to: string) => {
+            const queue: { id: string; path: Coordinate[] }[] = [{ id: from, path: [] }];
+            const seen = new Set([from]);
+            while (queue.length) {
+              const current = queue.shift()!;
+              if (current.id === to) return current.path;
+              for (const segment of district) {
+                const forward = segment.fromStationId === current.id;
+                if (!forward && segment.toStationId !== current.id) continue;
+                const next = forward ? segment.toStationId : segment.fromStationId;
+                if (seen.has(next)) continue;
+                seen.add(next);
+                const part = forward ? segment.path : [...segment.path].reverse();
+                queue.push({ id: next, path: [...current.path, ...part] });
+              }
+            }
+            return undefined;
+          };
+          const shared = walk("940GZZLUHSD", "940GZZLUACT");
+          if (shared && shared.length > 1) {
+            segments = [
+              ...segments,
+              { lineId: "piccadilly", fromStationId: "940GZZLUHSD", toStationId: "940GZZLUACT", path: shared },
+            ];
+            displayedLinePaths.push({ lineId: "piccadilly", path: shared });
+          }
+        }
         try {
           const elizabethData = await fetchElizabethLineData();
           if (cancelled) return;
@@ -408,6 +474,28 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
           );
         }
         segments = snapTrackSegmentsToStations(segments, stations);
+        // Metropolitan, DLR and Tram use their real OSM track geometry, stitched from fragments into long continuous paths.
+        const realTrackLines = new Set(["metropolitan", "dlr", "tram"]);
+        displayedLinePaths = displayedLinePaths.flatMap((linePath) => {
+          if (!realTrackLines.has(linePath.lineId)) return [linePath];
+          return [];
+        });
+        for (const lineId of realTrackLines) {
+          const railPaths = railPathsByLine.get(lineId);
+          if (!railPaths) continue;
+          const stationById = new Map(stations.map((station) => [station.id, station]));
+          const pairs = segments
+            .filter((segment) => segment.lineId === lineId)
+            .flatMap((segment) => {
+              const from = stationById.get(segment.fromStationId)?.coordinates;
+              const to = stationById.get(segment.toStationId)?.coordinates;
+              return from && to ? [{ from, to, fallback: segment.path }] : [];
+            });
+          const stationCoordinates = stations.map((station) => station.coordinates);
+          const routed =
+            pairs.length > 0 ? routeThroughRail(railPaths, pairs) : cleanRailPaths(railPaths, stationCoordinates);
+          displayedLinePaths.push(...routed.map((path) => ({ lineId, path })));
+        }
         displayedLinePaths.push(
           ...getTrackEndpointConnectors(segments)
             .filter(
@@ -434,35 +522,93 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
           if (lines.length === 0) {
             return '<p class="station-accessibility__empty">Line information is not available.</p>';
           }
-          const labels: Record<string, string> = {
-            "hammersmith-city": "Hammersmith & City",
-            dlr: "DLR",
-            tram: "Tram",
-          };
-          return `<ul class="station-accessibility__lines">${lines
-            .map((lineId) => {
-              const label =
-                labels[lineId] ??
-                `${lineId
-                  .split("-")
-                  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                  .join(" ")} line`;
-              const color = LINE_COLOURS[lineId] ?? "#64748b";
-              const textColor = lineId === "circle" ? "#1f2937" : "#ffffff";
-              return `<li class="station-accessibility__line" style="--line-color:${color};--line-text-color:${textColor}">${escapeHtml(label)}</li>`;
-            })
-            .join("")}</ul>`;
+          return `<ul class="station-accessibility__lines">${lines.map(getLineBadgeHtml).join("")}</ul>`;
         };
+
+        // Side-by-side spacing is real geometry sized to one drawn line width at the current zoom,
+        // so lines never overlap when zoomed out and stay continuous.
+        const slotMetresAt = (zoom: number) => {
+          const widthPx = 2.5 + (5.5 - 2.5) * Math.min(1, Math.max(0, (zoom - 11) / 3)) +
+            (zoom > 14 ? (8 - 5.5) * Math.min(1, (zoom - 14) / 3) : 0);
+          return (widthPx * 48750) / 2 ** zoom;
+        };
+        const spreadCache = new Map<number, ReturnType<typeof computeSpread>>();
+        const preparedTube = prepareOverlappingLines([
+          ...displayedLinePaths,
+          ...elizabethSegments.map((segment) => ({ lineId: "elizabeth", path: segment.path })),
+        ]);
+        const preparedOverground = prepareOverlappingLines(overgroundLinePaths);
+        function computeSpread(bucket: number) {
+          const slot = slotMetresAt(bucket);
+          return { tube: preparedTube.at(slot), overground: preparedOverground.at(slot) };
+        }
+        const spreadFor = (zoom: number) => {
+          const bucket = Math.min(17, Math.max(10, Math.round(zoom * 2) / 2));
+          let result = spreadCache.get(bucket);
+          if (!result) {
+            result = computeSpread(bucket);
+            spreadCache.set(bucket, result);
+          }
+          return result;
+        };
+        // Warm the cache one zoom step at a time while idle so zooming never waits on computation.
+        const warmBuckets = [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 16.5, 17];
+        const warmNext = () => {
+          const bucket = warmBuckets.shift();
+          if (bucket === undefined) return;
+          spreadFor(bucket);
+          setTimeout(warmNext, 30);
+        };
+        setTimeout(warmNext, 1500);
+        const toFeatures = (
+          list: { lineId: string; path: number[][] }[],
+        ) =>
+          list.map((linePath) => ({
+            type: "Feature" as const,
+            geometry: { type: "LineString" as const, coordinates: linePath.path },
+            properties: {
+              color: LINE_COLOURS[linePath.lineId] ?? "#ffffff",
+              lineId: linePath.lineId,
+            },
+          }));
+        let appliedBucket = Math.round(map.getZoom() * 2) / 2;
+        const applySpread = () => {
+          appliedBucket = Math.round(map.getZoom() * 2) / 2;
+          const spread = spreadFor(map.getZoom());
+          const setData = (id: string, list: { lineId: string; path: number[][] }[]) =>
+            (map.getSource(id) as maplibregl.GeoJSONSource | undefined)?.setData({
+              type: "FeatureCollection",
+              features: toFeatures(list),
+            });
+          setData("tube-lines", spread.tube.filter((l) => l.lineId !== "elizabeth"));
+          setData("elizabeth-line", spread.tube.filter((l) => l.lineId === "elizabeth"));
+          setData("overground-lines", spread.overground);
+        };
+        let spreadTimer: ReturnType<typeof setTimeout> | undefined;
+        map.on("zoom", () => {
+          if (Math.round(map.getZoom() * 2) / 2 === appliedBucket) return;
+          clearTimeout(spreadTimer);
+          spreadTimer = setTimeout(applySpread, 0);
+        });
+        const initialSpread = spreadFor(map.getZoom());
+        const spreadTube = initialSpread.tube;
+        const spreadOverground = initialSpread.overground;
 
         map.addSource("tube-lines", {
           type: "geojson",
           data: {
             type: "FeatureCollection",
-            features: displayedLinePaths.map((linePath) => ({
-              type: "Feature" as const,
-              geometry: { type: "LineString" as const, coordinates: linePath.path },
-              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff", lineId: linePath.lineId },
-            })),
+            features: spreadTube
+              .filter((linePath) => linePath.lineId !== "elizabeth")
+              .map((linePath) => ({
+                type: "Feature" as const,
+                geometry: { type: "LineString" as const, coordinates: linePath.path },
+                properties: {
+                  color: LINE_COLOURS[linePath.lineId] ?? "#ffffff",
+                  lineId: linePath.lineId,
+                  offset: linePath.offset,
+                },
+              })),
           },
         });
         map.addLayer({
@@ -492,11 +638,17 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
           type: "geojson",
           data: {
             type: "FeatureCollection",
-            features: elizabethSegments.map((segment) => ({
-              type: "Feature" as const,
-              geometry: { type: "LineString" as const, coordinates: segment.path },
-              properties: { color: LINE_COLOURS["elizabeth"], lineId: "elizabeth" },
-            })),
+            features: spreadTube
+              .filter((linePath) => linePath.lineId === "elizabeth")
+              .map((linePath) => ({
+                type: "Feature" as const,
+                geometry: { type: "LineString" as const, coordinates: linePath.path },
+                properties: {
+                  color: LINE_COLOURS["elizabeth"],
+                  lineId: "elizabeth",
+                  offset: linePath.offset,
+                },
+              })),
           },
         });
         map.addLayer({
@@ -526,10 +678,14 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
           type: "geojson",
           data: {
             type: "FeatureCollection",
-            features: overgroundLinePaths.map((linePath) => ({
+            features: spreadOverground.map((linePath) => ({
               type: "Feature" as const,
               geometry: { type: "LineString" as const, coordinates: linePath.path },
-              properties: { color: LINE_COLOURS[linePath.lineId] ?? "#ffffff", lineId: linePath.lineId },
+              properties: {
+                color: LINE_COLOURS[linePath.lineId] ?? "#ffffff",
+                lineId: linePath.lineId,
+                offset: linePath.offset,
+              },
             })),
           },
         });
@@ -563,9 +719,7 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
             "line-width": ["interpolate", ["linear"], ["zoom"], 11, 2.5, 14, 5.5, 17, 8],
           },
         });
-
         const stationMarkerGroups = groupStationMarkers(stations);
-        stationGroupsRef.current = stationMarkerGroups;
         const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => {
           const allLines = new Set<string>();
           for (const sid of group.stationIds) {
@@ -794,52 +948,14 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
               popup.remove();
               return;
             }
-            const stationIds = (() => {
-              try {
-                const mapData = (window as any).__stationGroups;
-                return null;
-              } catch {
-                return null;
-              }
-            })();
-            const linesSet = new Set<string>();
-            for (const segment of [...segments, ...elizabethSegments, ...overgroundSegments]) {
-              const stationId = String(feature.properties["id"]);
-              if (segment.fromStationId === stationId || segment.toStationId === stationId) {
-                linesSet.add(segment.lineId);
-              }
-            }
-            const lineOrder = ["bakerloo", "central", "circle", "district", "hammersmith-city", "jubilee", "metropolitan", "northern", "piccadilly", "victoria", "waterloo-city", "elizabeth", "dlr", "tram", "liberty", "lioness", "mildmay", "suffragette", "weaver", "windrush"];
-            const labels: Record<string, string> = {
-              "hammersmith-city": "Hammersmith & City",
-              dlr: "DLR",
-              tram: "Tram",
-              metropolitan: "Metropolitan",
-              piccadilly: "Piccadilly",
-              bakerloo: "Bakerloo",
-              central: "Central",
-              circle: "Circle",
-              district: "District",
-              jubilee: "Jubilee",
-              northern: "Northern",
-              victoria: "Victoria",
-              "waterloo-city": "Waterloo & City",
-              elizabeth: "Elizabeth",
-              liberty: "Liberty",
-              lioness: "Lioness",
-              mildmay: "Mildmay",
-              suffragette: "Suffragette",
-              weaver: "Weaver",
-              windrush: "Windrush",
-            };
-            const sortedLines = [...linesSet].sort((a, b) => lineOrder.indexOf(a) - lineOrder.indexOf(b));
-            const lineBars = sortedLines.map((lineId) => {
-              const color = LINE_COLOURS[lineId] ?? "#64748b";
-              const label = labels[lineId] ?? lineId.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-              const textColor = ["circle", "lioness", "suffragette"].includes(lineId) ? "#1f2937" : "#ffffff";
-              return `<span style="display:inline-flex;align-items:center;padding:1px 4px;border-radius:2px;background:${color};color:${textColor};font-size:10px;white-space:nowrap;">${escapeHtml(label)}</span>`;
-            }).join('');
-            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip" style="padding:6px 8px;"><div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;"><span style="font-size:12px;font-weight:600;">${escapeHtml(String(feature.properties["name"]))}</span><div style="display:flex;gap:2px;flex-wrap:wrap;align-items:center;">${lineBars}</div></div></article>`).addTo(map);
+            const stationName = escapeHtml(String(feature.properties["name"]));
+            const linesHtml = String(feature.properties["linesHtml"]);
+            popup
+              .setLngLat(event.lngLat)
+              .setHTML(
+                `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Station</p><h2 class="station-accessibility__title">${stationName}</h2><p class="station-accessibility__section-title">Lines serving this station</p>${linesHtml}<p class="station-accessibility__source">Click for station information and accessibility details</p></section>`,
+              )
+              .addTo(map);
             return;
           }
           if (feature.layer.id === "tube-lines" || feature.layer.id === "elizabeth-line" || feature.layer.id === "overground-lines") {
@@ -849,13 +965,15 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
               popup.remove();
               return;
             }
-            const lineId = feature.properties["lineId"] || feature.properties["color"];
-            const lineName = lineId
-              .toString()
-              .split("-")
-              .map((part: string) => part[0]?.toUpperCase() + part.slice(1))
-              .join(" & ");
-            popup.setLngLat(event.lngLat).setHTML(`<article class="train-tooltip"><h3>${escapeHtml(lineName)}${lineName.includes("line") ? "" : " line"}</h3></article>`).addTo(map);
+            const lineId = String(feature.properties["lineId"] ?? "");
+            const lineName = getLineName(lineId);
+            const lineSuffix = lineId === "dlr" || lineId === "tram" ? "" : " line";
+            popup
+              .setLngLat(event.lngLat)
+              .setHTML(
+                `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Transport line</p><h2 class="station-accessibility__title">${escapeHtml(lineName)}${lineSuffix}</h2><p class="station-accessibility__section-title">Line</p><ul class="station-accessibility__lines">${getLineBadgeHtml(lineId)}</ul><p class="station-accessibility__source">${getLineMode(lineId)} · Select a station for live details</p></section>`,
+              )
+              .addTo(map);
             return;
           }
           hoveredTrainPoint = [event.point.x, event.point.y];
@@ -1007,6 +1125,7 @@ export default function TubeMap({ overgroundEnabled, stationQuery = "" }: { over
 
     return () => {
       cancelled = true;
+      setIsMapReady(false);
       if (actionRefreshTimer) clearInterval(actionRefreshTimer);
       if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
       const center = map.getCenter();

@@ -204,32 +204,40 @@ describe("tube train map data", () => {
     }
   });
 
-  it("includes Elizabeth line stations in the departure board search", async () => {
+  it("merges Elizabeth line interchanges into the Tube departure board stations", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => ({
       ok: true,
       json: async () =>
         String(input).endsWith("/Line/elizabeth/StopPoints")
-          ? [
-              {
-                naptanId: "910GBONDST",
-                commonName: "Bond Street",
+          ? [{
+              naptanId: "910GBONDST",
+              commonName: "Bond Street",
+              lat: 51.5142,
+              lon: -0.1494,
+            }]
+          : String(input).endsWith("/Line/jubilee/StopPoints")
+            ? [{
+                naptanId: "940GZZLUBND",
+                commonName: "Bond Street Underground Station",
                 lat: 51.5142,
                 lon: -0.1494,
-              },
-            ]
-          : [],
+              }]
+            : [],
     }));
     vi.stubGlobal("fetch", fetchMock);
 
     try {
       const stations = await fetchAllStations();
-      expect(stations).toContainEqual({
-        id: "910GBONDST",
-        name: "Bond Street",
-        lat: 51.5142,
-        lon: -0.1494,
-        lines: ["elizabeth"],
-      });
+      expect(stations.filter((station) => station.name === "Bond Street")).toEqual([
+        {
+          id: "940GZZLUBND",
+          name: "Bond Street",
+          lat: 51.5142,
+          lon: -0.1494,
+          lines: ["jubilee", "elizabeth"],
+          stopIds: ["940GZZLUBND", "910GBONDST"],
+        },
+      ]);
       expect(fetchMock).toHaveBeenCalledWith("https://api.tfl.gov.uk/Line/elizabeth/StopPoints");
     } finally {
       vi.unstubAllGlobals();

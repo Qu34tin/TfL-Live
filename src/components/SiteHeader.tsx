@@ -28,7 +28,7 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
+      <div className="relative mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
         <Link
           to="/"
           className="flex items-center gap-2 font-display text-lg font-bold tracking-tight"
@@ -38,7 +38,7 @@ export function SiteHeader() {
           </span>
           TfL-<span className="text-primary">Live</span>
         </Link>
-        <nav className="flex gap-1">
+        <nav className="absolute left-1/2 flex -translate-x-1/2 gap-1">
           <Link
             to="/"
             className={link}
