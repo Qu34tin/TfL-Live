@@ -187,6 +187,20 @@
 .station-accessibility {
   padding: 14px;
 }
+.station-accessibility--compact .station-accessibility__title {
+  font-size: 13px;
+}
+.station-accessibility--compact .station-accessibility__lines {
+  margin-top: 5px;
+}
+.station-accessibility--compact .station-accessibility__line {
+  padding: 2px 7px;
+  font-size: 9px;
+}
+.station-accessibility--compact .station-accessibility__source {
+  margin: 6px 0 0;
+  font-size: 9px;
+}
 .station-accessibility__eyebrow {
   margin: 0 0 3px;
   color: #6950a1;
@@ -342,4 +356,21 @@
 }
 .train-tooltip li {
   padding: 1px 0;
+}
+
+.tube-popup .maplibregl-popup-content:has(.station-accessibility--compact),
+.dark .tube-popup .maplibregl-popup-content:has(.station-accessibility--compact) {
+  width: auto;
+  min-width: 0;
+  max-width: 210px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.station-accessibility--compact {
+  padding: 0;
+}
+.station-accessibility--compact .station-accessibility__line {
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
 }

@@ -557,6 +557,31 @@ export async function fetchTfLRouteData(
   return parseTfLRouteSequence(await response.json(), lineId);
 }
 
+// A single direction misses branches and loops (e.g. Croydon town centre), so merge both.
+export async function fetchTfLRouteDataAllDirections(lineId: string): Promise<TfLRouteData> {
+  const outbound = await fetchTfLRouteData(lineId, "outbound");
+  const inbound = await fetchTfLRouteData(lineId, "inbound").catch(() => undefined);
+  if (!inbound) return outbound;
+
+  const stations = new Map<string, TubeStation>();
+  for (const station of [...outbound.stations, ...inbound.stations]) {
+    if (!stations.has(station.id)) stations.set(station.id, station);
+  }
+  const seen = new Set<string>();
+  const segments: TrackSegment[] = [];
+  for (const segment of [...outbound.segments, ...inbound.segments]) {
+    const key = [segment.fromStationId, segment.toStationId].sort().join(":");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    segments.push(segment);
+  }
+  return {
+    stations: [...stations.values()],
+    segments,
+    linePaths: [...outbound.linePaths, ...inbound.linePaths],
+  };
+}
+
 export async function fetchElizabethLineArrivals(): Promise<ElizabethLineArrival[]> {
   const response = await fetch("https://api.tfl.gov.uk/Line/elizabeth/Arrivals");
   if (!response.ok) throw new Error(`Elizabeth line train feed unavailable (${response.status})`);
@@ -993,6 +1018,7 @@ export function getLineTrainPositions(
       visited.add(fromStationId);
       currentStationId = fromStationId;
     }
+    // Past the end of the known track the vehicle is waiting at its terminus.
     position ??= furthestPosition;
     if (!position) continue;
 
@@ -1017,7 +1043,20 @@ export function getLineTrainPositions(
     });
   }
 
-  return positions;
+  // The same physical train is predicted at several stations (and DLR feeds have
+  // no vehicle id), so merge trains sitting in the same directed segment.
+  const kept: TrainPosition[] = [];
+  for (const position of positions) {
+    const duplicate = kept.some(
+      (other) =>
+        other.fromStationId === position.fromStationId &&
+        other.toStationId === position.toStationId &&
+        Math.abs(other.progressPercent - position.progressPercent) < 3,
+    );
+    if (!duplicate) kept.push(position);
+  }
+
+  return kept;
 }
 
 export function getElizabethLineTrainPositions(

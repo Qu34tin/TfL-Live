@@ -8,7 +8,7 @@ import {
   fetchElizabethLineArrivals,
   fetchElizabethLineData,
   fetchOsmRailPaths,
-  fetchTfLRouteData,
+  fetchTfLRouteDataAllDirections,
   fetchTrainActions,
   fetchTubeMapData,
   groupStationMarkers,
@@ -60,14 +60,6 @@ function getLineBadgeHtml(lineId: string) {
   const label =
     lineId === "dlr" || lineId === "tram" ? getLineName(lineId) : `${getLineName(lineId)} line`;
   return `<li class="station-accessibility__line" style="--line-color:${color};--line-text-color:${textColor}">${escapeHtml(label)}</li>`;
-}
-
-function getLineMode(lineId: string) {
-  if (lineId === "elizabeth") return "Elizabeth line";
-  if (lineId === "dlr") return "Docklands Light Railway";
-  if (lineId === "tram") return "London Trams";
-  if (OVERGROUND_LINE_SET.has(lineId)) return "London Overground";
-  return "London Underground";
 }
 
 export default function TubeMap({
@@ -372,13 +364,29 @@ export default function TubeMap({
             }
             return undefined;
           };
-          const shared = walk("940GZZLUHSD", "940GZZLUACT");
-          if (shared && shared.length > 1) {
+          for (const [from, to, display] of [
+            ["940GZZLUHSD", "940GZZLUACT", true],
+            ["940GZZLUTNG", "940GZZLUACT", false],
+            ["940GZZLUECT", "940GZZLUBSC", true],
+          ] as const) {
+            const shared = walk(from, to);
+            if (!shared || shared.length < 2) continue;
             segments = [
               ...segments,
-              { lineId: "piccadilly", fromStationId: "940GZZLUHSD", toStationId: "940GZZLUACT", path: shared },
+              { lineId: "piccadilly", fromStationId: from, toStationId: to, path: shared },
             ];
-            displayedLinePaths.push({ lineId: "piccadilly", path: shared });
+            if (display) {
+              const fromStation = mapData.stations.find((station) => station.id === from);
+              const toStation = mapData.stations.find((station) => station.id === to);
+              displayedLinePaths.push({
+                lineId: "piccadilly",
+                path: [
+                  ...(fromStation ? [fromStation.coordinates] : []),
+                  ...shared,
+                  ...(toStation ? [toStation.coordinates] : []),
+                ],
+              });
+            }
           }
         }
         try {
@@ -392,7 +400,7 @@ export default function TubeMap({
         }
         for (const line of ["metropolitan", "dlr", "tram"] as const) {
           try {
-            const routeData = await fetchTfLRouteData(line);
+            const routeData = await fetchTfLRouteDataAllDirections(line);
             if (cancelled) return;
             for (const station of routeData.stations) {
               if (!stations.some((existing) => existing.id === station.id)) {
@@ -424,7 +432,7 @@ export default function TubeMap({
         const overgroundRoutes = await Promise.all(
           OVERGROUND_LINE_IDS.map(async (lineId) => {
             try {
-              const routeData = await fetchTfLRouteData(lineId, "outbound");
+              const routeData = await fetchTfLRouteDataAllDirections(lineId);
               return { lineId, routeData };
             } catch (routeError) {
               console.error(`Unable to load ${lineId} route geometry`, routeError);
@@ -497,7 +505,7 @@ export default function TubeMap({
           displayedLinePaths.push(...routed.map((path) => ({ lineId, path })));
         }
         displayedLinePaths.push(
-          ...getTrackEndpointConnectors(segments)
+          ...getTrackEndpointConnectors(segments, 150)
             .filter(
               (segment) =>
                 segment.lineId !== "metropolitan" &&
@@ -966,12 +974,10 @@ export default function TubeMap({
               return;
             }
             const lineId = String(feature.properties["lineId"] ?? "");
-            const lineName = getLineName(lineId);
-            const lineSuffix = lineId === "dlr" || lineId === "tram" ? "" : " line";
             popup
               .setLngLat(event.lngLat)
               .setHTML(
-                `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Transport line</p><h2 class="station-accessibility__title">${escapeHtml(lineName)}${lineSuffix}</h2><p class="station-accessibility__section-title">Line</p><ul class="station-accessibility__lines">${getLineBadgeHtml(lineId)}</ul><p class="station-accessibility__source">${getLineMode(lineId)} · Select a station for live details</p></section>`,
+                `<section class="station-accessibility station-accessibility--compact"><ul class="station-accessibility__lines">${getLineBadgeHtml(lineId)}</ul></section>`,
               )
               .addTo(map);
             return;
