@@ -8,9 +8,11 @@ import {
   fetchElizabethLineArrivals,
   fetchElizabethLineData,
   fetchOsmRailPaths,
+  fetchOsmTubeBranchPaths,
   fetchTfLRouteDataAllDirections,
   fetchTrainActions,
   fetchTubeMapData,
+  extractPathBetweenStations,
   groupStationMarkers,
   getTrackEndpointConnectors,
   getElizabethLineTrainPositions,
@@ -65,13 +67,17 @@ function getLineBadgeHtml(lineId: string) {
 export default function TubeMap({
   overgroundEnabled,
   selectedStation,
+  hiddenLines = [],
 }: {
   overgroundEnabled: boolean;
   selectedStation: Station | null;
+  hiddenLines?: string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overgroundEnabledRef = useRef(overgroundEnabled);
+  const hiddenLinesRef = useRef(hiddenLines);
+  const applyLineFilterRef = useRef<() => void>(() => undefined);
   const cameraRef = useRef<{
     center: [number, number];
     zoom: number;
@@ -104,6 +110,11 @@ export default function TubeMap({
 
     return () => themeObserver.disconnect();
   }, []);
+
+  useEffect(() => {
+    hiddenLinesRef.current = hiddenLines;
+    applyLineFilterRef.current();
+  }, [hiddenLines]);
 
   useEffect(() => {
     overgroundEnabledRef.current = overgroundEnabled;
@@ -342,7 +353,9 @@ export default function TubeMap({
         if (cancelled) return;
         stations = mapData.stations;
         segments = mapData.segments;
-        displayedLinePaths = mapData.segments.map(({ lineId, path }) => ({ lineId, path }));
+        displayedLinePaths = snapTrackSegmentsToStations(mapData.segments, stations).map(
+          ({ lineId, path }) => ({ lineId, path }),
+        );
         // The Piccadilly shares the District track between Hammersmith and Acton Town, but the map data has no segment there.
         {
           const district = mapData.segments.filter((segment) => segment.lineId === "district");
@@ -387,6 +400,82 @@ export default function TubeMap({
                 ],
               });
             }
+          }
+        }
+        for (const connection of [
+          {
+            lineId: "district",
+            fromStationId: "940GZZLUKOY",
+            toStationId: "940GZZLUECT",
+          },
+          {
+            lineId: "hammersmith-city",
+            fromStationId: "940GZZLULVT",
+            toStationId: "940GZZLUADE",
+          },
+        ] as const) {
+          const hasConnection = (candidate: TrackSegment) =>
+            candidate.lineId === connection.lineId &&
+            ((candidate.fromStationId === connection.fromStationId &&
+              candidate.toStationId === connection.toStationId) ||
+              (candidate.fromStationId === connection.toStationId &&
+                candidate.toStationId === connection.fromStationId));
+          if (segments.some(hasConnection)) continue;
+
+          try {
+            const routeData = await fetchTfLRouteDataAllDirections(connection.lineId);
+            if (cancelled) return;
+            const routeSegment = routeData.segments.find(hasConnection);
+            if (!routeSegment) {
+              throw new Error(
+                `TfL route data is missing the connection ${connection.fromStationId}-${connection.toStationId}`,
+              );
+            }
+            const fromStation = routeData.stations.find(
+              (station) => station.id === connection.fromStationId,
+            );
+            const toStation = routeData.stations.find(
+              (station) => station.id === connection.toStationId,
+            );
+            if (!fromStation || !toStation) {
+              throw new Error(
+                `TfL route data is missing station geometry for ${connection.fromStationId}-${connection.toStationId}`,
+              );
+            }
+            const realTrackPath = extractPathBetweenStations(
+              await fetchOsmTubeBranchPaths(connection.lineId),
+              fromStation,
+              toStation,
+            );
+            if (!realTrackPath) {
+              throw new Error(
+                `OpenStreetMap track data is missing geometry for ${connection.fromStationId}-${connection.toStationId}`,
+              );
+            }
+            for (const station of routeData.stations) {
+              if (!stations.some((existing) => existing.id === station.id)) {
+                stations.push(station);
+              }
+            }
+            const [connectedSegment] = snapTrackSegmentsToStations(
+              [{ ...routeSegment, path: realTrackPath }],
+              stations,
+            );
+            if (!connectedSegment) {
+              throw new Error(
+                `Unable to connect ${connection.fromStationId} to ${connection.toStationId}`,
+              );
+            }
+            segments.push(connectedSegment);
+            displayedLinePaths.push({
+              lineId: connectedSegment.lineId,
+              path: connectedSegment.path,
+            });
+          } catch (routeError) {
+            console.error(
+              `Unable to load ${connection.lineId} connection ${connection.fromStationId}-${connection.toStationId}`,
+              routeError,
+            );
           }
         }
         try {
@@ -501,7 +590,9 @@ export default function TubeMap({
             });
           const stationCoordinates = stations.map((station) => station.coordinates);
           const routed =
-            pairs.length > 0 ? routeThroughRail(railPaths, pairs) : cleanRailPaths(railPaths, stationCoordinates);
+            pairs.length > 0
+              ? routeThroughRail(railPaths, pairs)
+              : cleanRailPaths(railPaths, stationCoordinates);
           displayedLinePaths.push(...routed.map((path) => ({ lineId, path })));
         }
         displayedLinePaths.push(
@@ -536,7 +627,9 @@ export default function TubeMap({
         // Side-by-side spacing is real geometry sized to one drawn line width at the current zoom,
         // so lines never overlap when zoomed out and stay continuous.
         const slotMetresAt = (zoom: number) => {
-          const widthPx = 2.5 + (5.5 - 2.5) * Math.min(1, Math.max(0, (zoom - 11) / 3)) +
+          const widthPx =
+            2.5 +
+            (5.5 - 2.5) * Math.min(1, Math.max(0, (zoom - 11) / 3)) +
             (zoom > 14 ? (8 - 5.5) * Math.min(1, (zoom - 14) / 3) : 0);
           return (widthPx * 48750) / 2 ** zoom;
         };
@@ -560,7 +653,9 @@ export default function TubeMap({
           return result;
         };
         // Warm the cache one zoom step at a time while idle so zooming never waits on computation.
-        const warmBuckets = [10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 16.5, 17];
+        const warmBuckets = [
+          10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 16.5, 17,
+        ];
         const warmNext = () => {
           const bucket = warmBuckets.shift();
           if (bucket === undefined) return;
@@ -568,9 +663,7 @@ export default function TubeMap({
           setTimeout(warmNext, 30);
         };
         setTimeout(warmNext, 1500);
-        const toFeatures = (
-          list: { lineId: string; path: number[][] }[],
-        ) =>
+        const toFeatures = (list: { lineId: string; path: number[][] }[]) =>
           list.map((linePath) => ({
             type: "Feature" as const,
             geometry: { type: "LineString" as const, coordinates: linePath.path },
@@ -588,8 +681,14 @@ export default function TubeMap({
               type: "FeatureCollection",
               features: toFeatures(list),
             });
-          setData("tube-lines", spread.tube.filter((l) => l.lineId !== "elizabeth"));
-          setData("elizabeth-line", spread.tube.filter((l) => l.lineId === "elizabeth"));
+          setData(
+            "tube-lines",
+            spread.tube.filter((l) => l.lineId !== "elizabeth"),
+          );
+          setData(
+            "elizabeth-line",
+            spread.tube.filter((l) => l.lineId === "elizabeth"),
+          );
           setData("overground-lines", spread.overground);
         };
         let spreadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -905,6 +1004,33 @@ export default function TubeMap({
         });
 
         const trainLayerIds = ["trains", "elizabeth-trains", "overground-trains", "line-trains"];
+        const lineFilterLayerIds = [
+          "tube-lines-glow",
+          "tube-lines",
+          "elizabeth-line-glow",
+          "elizabeth-line",
+          "overground-lines-glow",
+          "overground-lines",
+          "trains-halo",
+          "trains",
+          "elizabeth-trains-halo",
+          "elizabeth-trains",
+          "line-trains-halo",
+          "line-trains",
+          "overground-trains-halo",
+          "overground-trains",
+        ];
+        applyLineFilterRef.current = () => {
+          const hidden = hiddenLinesRef.current;
+          for (const layerId of lineFilterLayerIds) {
+            if (!map.getLayer(layerId)) continue;
+            map.setFilter(
+              layerId,
+              hidden.length > 0 ? ["!", ["in", ["get", "lineId"], ["literal", hidden]]] : null,
+            );
+          }
+        };
+        applyLineFilterRef.current();
         let hoveredTrainPoint: [number, number] | null = null;
         let hoveredTrainHtml = "";
         const updateHoveredTrainPopup = () => {
@@ -929,7 +1055,14 @@ export default function TubeMap({
         map.on("render", updateHoveredTrainPopup);
         map.on("mousemove", (event: maplibregl.MapMouseEvent) => {
           const features = map.queryRenderedFeatures(event.point, {
-            layers: ["stations", "overground-stations", ...trainLayerIds, "tube-lines", "elizabeth-line", "overground-lines"],
+            layers: [
+              "stations",
+              "overground-stations",
+              ...trainLayerIds,
+              "tube-lines",
+              "elizabeth-line",
+              "overground-lines",
+            ],
           });
           const feature =
             features.find((candidate) => candidate.layer.id === "stations") ??
@@ -966,7 +1099,11 @@ export default function TubeMap({
               .addTo(map);
             return;
           }
-          if (feature.layer.id === "tube-lines" || feature.layer.id === "elizabeth-line" || feature.layer.id === "overground-lines") {
+          if (
+            feature.layer.id === "tube-lines" ||
+            feature.layer.id === "elizabeth-line" ||
+            feature.layer.id === "overground-lines"
+          ) {
             hoveredTrainPoint = null;
             hoveredTrainHtml = "";
             if (stationPopup.isOpen()) {

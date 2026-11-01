@@ -5,6 +5,9 @@ import {
   getTrackEndpointConnectors,
   parseOsmRailPaths,
   fetchOsmRailPaths,
+  fetchOsmTubeBranchPaths,
+  fetchTubeMapData,
+  extractPathBetweenStations,
   getTrainPositions,
   groupStationMarkers,
   parseTfLRouteSequence,
@@ -13,6 +16,7 @@ import {
   snapTrackSegmentsToStations,
   snapCoordinateToRailPaths,
   secondsSinceUtcMidnight,
+  type Coordinate,
   type TrainActions,
   type TrackSegment,
   type TubeStation,
@@ -25,9 +29,17 @@ import {
   fetchOvergroundArrivals,
   fetchStationAccessibility,
   OVERGROUND_LINE_IDS,
+  TUBE_LINES,
 } from "@/lib/tfl";
 
 describe("tube train map data", () => {
+  it("counts only Underground lines as Tube lines", () => {
+    expect(TUBE_LINES).toHaveLength(11);
+    expect(TUBE_LINES).not.toContain("dlr");
+    expect(TUBE_LINES).not.toContain("tram");
+    expect(TUBE_LINES).not.toContain("elizabeth");
+  });
+
   it("groups duplicate station points such as Bank into one map marker", () => {
     const groups = groupStationMarkers([
       { id: "bank-tube", name: "Bank", coordinates: [-0.0886, 51.5133] },
@@ -48,6 +60,29 @@ describe("tube train map data", () => {
     ]);
 
     expect(groups).toHaveLength(2);
+  });
+
+  it("groups TfL station records for Kensington Olympia despite platform coordinate offsets", () => {
+    const groups = groupStationMarkers([
+      {
+        id: "940GZZLUKOY",
+        name: "Kensington (Olympia)",
+        coordinates: [-0.210015, 51.497624],
+      },
+      {
+        id: "HUBKPA",
+        name: "Kensington (Olympia)",
+        coordinates: [-0.210502, 51.496156],
+      },
+      {
+        id: "910GKENOLYM",
+        name: "Kensington (Olympia)",
+        coordinates: [-0.210364, 51.497899],
+      },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.stationIds).toEqual(["940GZZLUKOY", "HUBKPA", "910GKENOLYM"]);
   });
 
   it("parses detailed OSM rail paths without simplifying their rail vertices", () => {
@@ -119,6 +154,43 @@ describe("tube train map data", () => {
         ],
       ]);
       expect(fetchMock).toHaveBeenCalledWith("/data/rail-track-geometries.json");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("loads real OSM rail geometry for the District and Hammersmith & City map links", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        district: [
+          [
+            [-0.21, 51.49],
+            [-0.205, 51.495],
+            [-0.19, 51.492],
+          ],
+        ],
+        "hammersmith-city": [
+          [
+            [-0.083, 51.517],
+            [-0.078, 51.516],
+            [-0.072, 51.515],
+          ],
+        ],
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(fetchOsmTubeBranchPaths("district")).resolves.toEqual([
+        [
+          [-0.21, 51.49],
+          [-0.205, 51.495],
+          [-0.19, 51.492],
+        ],
+      ]);
+      await expect(fetchOsmTubeBranchPaths("hammersmith-city")).resolves.toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledWith("/data/tube-branch-track-geometries.json");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -209,19 +281,23 @@ describe("tube train map data", () => {
       ok: true,
       json: async () =>
         String(input).endsWith("/Line/elizabeth/StopPoints")
-          ? [{
-              naptanId: "910GBONDST",
-              commonName: "Bond Street",
-              lat: 51.5142,
-              lon: -0.1494,
-            }]
-          : String(input).endsWith("/Line/jubilee/StopPoints")
-            ? [{
-                naptanId: "940GZZLUBND",
-                commonName: "Bond Street Underground Station",
+          ? [
+              {
+                naptanId: "910GBONDST",
+                commonName: "Bond Street",
                 lat: 51.5142,
                 lon: -0.1494,
-              }]
+              },
+            ]
+          : String(input).endsWith("/Line/jubilee/StopPoints")
+            ? [
+                {
+                  naptanId: "940GZZLUBND",
+                  commonName: "Bond Street Underground Station",
+                  lat: 51.5142,
+                  lon: -0.1494,
+                },
+              ]
             : [],
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -318,6 +394,33 @@ describe("tube train map data", () => {
         [-0.11, 51.51],
         [-0.12, 51.52],
       ],
+    ]);
+  });
+
+  it("extracts the real track vertices between two stations", () => {
+    const stations: TubeStation[] = [
+      { id: "A", name: "Alpha", coordinates: [0, 0] },
+      { id: "B", name: "Beta", coordinates: [0.003, 0] },
+    ];
+    const track: Coordinate[] = [
+      [0, 0],
+      [0.001, 0.001],
+      [0.002, 0.001],
+      [0.003, 0],
+      [0.004, 0],
+    ];
+
+    expect(extractPathBetweenStations([track], stations[0]!, stations[1]!)).toEqual([
+      [0, 0],
+      [0.001, 0.001],
+      [0.002, 0.001],
+      [0.003, 0],
+    ]);
+    expect(extractPathBetweenStations([track], stations[1]!, stations[0]!)).toEqual([
+      [0.003, 0],
+      [0.002, 0.001],
+      [0.001, 0.001],
+      [0, 0],
     ]);
   });
 
@@ -811,6 +914,96 @@ describe("tube train map data", () => {
         ],
       },
     ]);
+  });
+
+  it("removes the Circle Line qualifier from Edgware Road's station name", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          "940GZZLUERC": {
+            name: "Edgware Road (Circle Line) Underground Station",
+            latitude: 51.519731879882976,
+            longitude: -0.1680936994548949,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          'line_id,from_station_id,to_station_id,path\ncircle,940GZZLUERC,940GZZLUPAC,"[[-0.17075,51.5183],[-0.1767,51.5175]]"',
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { stations } = await fetchTubeMapData();
+      expect(stations).toEqual([
+        {
+          id: "940GZZLUERC",
+          name: "Edgware Road",
+          coordinates: [-0.1680936994548949, 51.519731879882976],
+        },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("smoothly connects track geometry to stations when the source endpoint is over 150m away", () => {
+    const station: TubeStation = {
+      id: "940GZZLUERC",
+      name: "Edgware Road",
+      coordinates: [-0.1680936994548949, 51.519731879882976],
+    };
+    const segment: TrackSegment = {
+      lineId: "circle",
+      fromStationId: station.id,
+      toStationId: "paddington",
+      path: [
+        [-0.1707503, 51.5182981],
+        [-0.1767, 51.5175],
+      ],
+    };
+    const paddington: TubeStation = {
+      id: "paddington",
+      name: "Paddington",
+      coordinates: [-0.17451750127828, 51.515964606761436],
+    };
+
+    const connectedPath = snapTrackSegmentsToStations([segment], [station, paddington])[0]?.path;
+
+    expect(connectedPath?.[0]).toEqual(station.coordinates);
+    expect(connectedPath).toContainEqual(segment.path[0]);
+    expect(connectedPath?.at(-1)).toEqual(paddington.coordinates);
+    expect(connectedPath).not.toEqual(segment.path);
+  });
+
+  it("keeps station connections when the source endpoint is over 300m away", () => {
+    const station: TubeStation = {
+      id: "A",
+      name: "Alpha",
+      coordinates: [0, 0],
+    };
+    const otherStation: TubeStation = {
+      id: "B",
+      name: "Beta",
+      coordinates: [0.01, 0],
+    };
+    const segment: TrackSegment = {
+      lineId: "circle",
+      fromStationId: station.id,
+      toStationId: otherStation.id,
+      path: [
+        [0.004, 0],
+        [0.01, 0],
+      ],
+    };
+
+    const connectedPath = snapTrackSegmentsToStations([segment], [station, otherStation])[0]?.path;
+
+    expect(connectedPath?.[0]).toEqual(station.coordinates);
+    expect(connectedPath).toContainEqual(segment.path[0]);
   });
 
   it("snaps reversed line endpoints to their station coordinates", () => {

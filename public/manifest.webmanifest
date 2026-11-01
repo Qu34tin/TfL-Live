@@ -1,0 +1,14 @@
+{
+  "name": "TfL-Live — London Underground Live",
+  "short_name": "TfL-Live",
+  "description": "Live London Tube status, departure boards, journey planner and 3D train map.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1117",
+  "theme_color": "#0b1117",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

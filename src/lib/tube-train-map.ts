@@ -14,6 +14,8 @@ export type StationMarkerGroup = {
   stationIds: string[];
 };
 
+const STATION_MARKER_GROUP_RADIUS_METERS = 200;
+
 function stationDistanceMeters(a: Coordinate, b: Coordinate): number {
   const latitude = ((a[1] + b[1]) / 2) * (Math.PI / 180);
   const x = (a[0] - b[0]) * Math.cos(latitude) * 111_320;
@@ -33,7 +35,8 @@ export function groupStationMarkers(stations: TubeStation[]): StationMarkerGroup
     const group = groups.find(
       (candidate) =>
         normalizeStationName(candidate.station.name) === normalizedName &&
-        stationDistanceMeters(candidate.station.coordinates, station.coordinates) <= 100,
+        stationDistanceMeters(candidate.station.coordinates, station.coordinates) <=
+          STATION_MARKER_GROUP_RADIUS_METERS,
     );
 
     if (group) {
@@ -105,6 +108,16 @@ export async function fetchOsmRailPaths(
   const response = await fetch("/data/rail-track-geometries.json");
   if (!response.ok) {
     throw new Error(`OpenStreetMap rail geometry unavailable (${response.status})`);
+  }
+  return parseOsmRailPaths(await response.json(), lineId);
+}
+
+export async function fetchOsmTubeBranchPaths(
+  lineId: "district" | "hammersmith-city",
+): Promise<Coordinate[][]> {
+  const response = await fetch("/data/tube-branch-track-geometries.json");
+  if (!response.ok) {
+    throw new Error(`OpenStreetMap ${lineId} track geometry unavailable (${response.status})`);
   }
   return parseOsmRailPaths(await response.json(), lineId);
 }
@@ -222,6 +235,57 @@ function coordinateDistance(first: Coordinate, second: Coordinate): number {
   return Math.hypot((first[0] - second[0]) * latitudeScale, first[1] - second[1]);
 }
 
+function smoothStationConnector(
+  start: Coordinate,
+  end: Coordinate,
+  startDirection: Coordinate,
+  endDirection: Coordinate,
+): Coordinate[] {
+  const longitudeScale = Math.cos(((start[1] + end[1]) / 2) * (Math.PI / 180));
+  const toMeters = ([longitude, latitude]: Coordinate): Coordinate => [
+    longitude * longitudeScale * 111_320,
+    latitude * 111_320,
+  ];
+  const fromMeters = ([x, y]: Coordinate): Coordinate => [
+    x / (longitudeScale * 111_320),
+    y / 111_320,
+  ];
+  const startPoint = toMeters(start);
+  const endPoint = toMeters(end);
+  const unit = (vector: Coordinate): Coordinate => {
+    const meterVector = [vector[0] * longitudeScale, vector[1]];
+    const length = Math.hypot(meterVector[0], meterVector[1]) || 1;
+    return [meterVector[0] / length, meterVector[1] / length];
+  };
+  const distance = Math.hypot(endPoint[0] - startPoint[0], endPoint[1] - startPoint[1]);
+  const controlDistance = Math.min(distance * 0.35, 60);
+  const startTangent = unit(startDirection);
+  const endTangent = unit(endDirection);
+  const controlStart: Coordinate = [
+    startPoint[0] + startTangent[0] * controlDistance,
+    startPoint[1] + startTangent[1] * controlDistance,
+  ];
+  const controlEnd: Coordinate = [
+    endPoint[0] - endTangent[0] * controlDistance,
+    endPoint[1] - endTangent[1] * controlDistance,
+  ];
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const t = (index + 1) / 8;
+    const inverse = 1 - t;
+    return fromMeters([
+      inverse ** 3 * startPoint[0] +
+        3 * inverse ** 2 * t * controlStart[0] +
+        3 * inverse * t ** 2 * controlEnd[0] +
+        t ** 3 * endPoint[0],
+      inverse ** 3 * startPoint[1] +
+        3 * inverse ** 2 * t * controlStart[1] +
+        3 * inverse * t ** 2 * controlEnd[1] +
+        t ** 3 * endPoint[1],
+    ]);
+  });
+}
+
 export function snapTrackSegmentsToStations(
   segments: TrackSegment[],
   stations: TubeStation[],
@@ -242,9 +306,47 @@ export function snapTrackSegmentsToStations(
       coordinateDistance(last, fromStation.coordinates) +
       coordinateDistance(first, toStation.coordinates);
     const path = reversedDistance < normalDistance ? [...segment.path].reverse() : segment.path;
+    const pathStart = path[0];
+    const pathEnd = path.at(-1);
+    const nextAfterStart = path[1];
+    const previousBeforeEnd = path.at(-2);
+    if (!pathStart || !pathEnd || !nextAfterStart || !previousBeforeEnd) return segment;
+    const startGap = coordinateDistance(pathStart, fromStation.coordinates) * 111_320;
+    const endGap = coordinateDistance(pathEnd, toStation.coordinates) * 111_320;
+    const start =
+      startGap <= 1
+        ? [fromStation.coordinates]
+        : startGap > 150
+          ? [
+              fromStation.coordinates,
+              ...smoothStationConnector(
+                fromStation.coordinates,
+                pathStart,
+                [
+                  pathStart[0] - fromStation.coordinates[0],
+                  pathStart[1] - fromStation.coordinates[1],
+                ],
+                [nextAfterStart[0] - pathStart[0], nextAfterStart[1] - pathStart[1]],
+              ),
+            ]
+          : [fromStation.coordinates];
+    const end =
+      endGap <= 1
+        ? [toStation.coordinates]
+        : endGap > 150
+          ? [
+              ...smoothStationConnector(
+                pathEnd,
+                toStation.coordinates,
+                [pathEnd[0] - previousBeforeEnd[0], pathEnd[1] - previousBeforeEnd[1]],
+                [toStation.coordinates[0] - pathEnd[0], toStation.coordinates[1] - pathEnd[1]],
+              ),
+              toStation.coordinates,
+            ]
+          : [toStation.coordinates];
     return {
       ...segment,
-      path: [fromStation.coordinates, ...path, toStation.coordinates],
+      path: [...start, ...path, ...end],
     };
   });
 }
@@ -423,6 +525,49 @@ function projectStationOntoPath(
     }
   }
   return best;
+}
+
+export function extractPathBetweenStations(
+  linePaths: Coordinate[][],
+  fromStation: TubeStation,
+  toStation: TubeStation,
+): Coordinate[] | undefined {
+  let best:
+    | {
+        path: Coordinate[];
+        score: number;
+      }
+    | undefined;
+
+  for (const linePath of linePaths) {
+    const from = projectStationOntoPath(fromStation, linePath);
+    const to = projectStationOntoPath(toStation, linePath);
+    if (!from || !to || from.distance > 0.002 || to.distance > 0.002) continue;
+
+    const startMeasure = Math.min(from.measure, to.measure);
+    const endMeasure = Math.max(from.measure, to.measure);
+    if (endMeasure - startMeasure < 0.001) continue;
+    const followsPath = from.measure < to.measure;
+    const path: Coordinate[] = [fromStation.coordinates];
+
+    if (followsPath) {
+      for (let index = Math.floor(startMeasure) + 1; index < endMeasure; index += 1) {
+        const point = linePath[index];
+        if (point) path.push(point);
+      }
+    } else {
+      for (let index = Math.ceil(endMeasure) - 1; index > startMeasure; index -= 1) {
+        const point = linePath[index];
+        if (point) path.push(point);
+      }
+    }
+
+    path.push(toStation.coordinates);
+    const score = from.distance + to.distance;
+    if (!best || score < best.score) best = { path, score };
+  }
+
+  return best?.path;
 }
 
 export function parseTfLRouteSequence(data: unknown, lineId: string): TfLRouteData {
@@ -614,7 +759,10 @@ export async function fetchTubeMapData(): Promise<{
     )
     .map(([id, station]) => ({
       id,
-      name: station.name.replace(/ Underground Station$/, "").trim(),
+      name: station.name
+        .replace(/ Underground Station$/, "")
+        .replace(/\s*\(Circle Line\)/i, "")
+        .trim(),
       coordinates: [station.longitude, station.latitude] as Coordinate,
     }));
   const segments = parseTubeTrackCsv(csv);
@@ -836,7 +984,9 @@ export function getTrainPositions(
           });
         }
         const trainActionsForLine: any = (trainActions as any)[lineId];
-        const trainActionListAny: any = trainActionsForLine ? trainActionsForLine[trainId] : undefined;
+        const trainActionListAny: any = trainActionsForLine
+          ? trainActionsForLine[trainId]
+          : undefined;
         const list: any[] = Array.isArray(trainActionListAny) ? trainActionListAny : [];
         let firstAction: any = list.length > 0 ? list[0] : undefined;
         let lastAction: any = list.length > 0 ? list[list.length - 1] : undefined;
@@ -1022,7 +1172,9 @@ export function getLineTrainPositions(
     position ??= furthestPosition;
     if (!position) continue;
 
-    const firstPrediction = [...predictions.entries()].sort(([, a], [, b]) => b.arrival.timeToStation - a.arrival.timeToStation)[predictions.size - 1];
+    const firstPrediction = [...predictions.entries()].sort(
+      ([, a], [, b]) => b.arrival.timeToStation - a.arrival.timeToStation,
+    )[predictions.size - 1];
     const routeStartStationId = firstPrediction?.[0] || position.fromStationId;
     const routeEndStationId = destination?.id || toStationId;
     positions.push({

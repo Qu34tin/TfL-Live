@@ -1,7 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { Bell, BellRing } from "lucide-react";
+import { useMemo, useState } from "react";
 import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
-import { fetchLineStatus, LINE_COLOURS } from "@/lib/tfl";
+import {
+  fetchLineStatus,
+  fetchPlannedDisruptions,
+  LINE_COLOURS,
+  nextWeekendRange,
+} from "@/lib/tfl";
+import { STORAGE_KEYS, toggleInList, useStoredState } from "@/lib/storage";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -26,6 +34,28 @@ function Index() {
     queryFn: fetchLineStatus,
     refetchInterval: 30_000,
   });
+  const weekend = useMemo(() => nextWeekendRange(), []);
+  const { data: weekendLines } = useQuery({
+    queryKey: ["planned-closures", weekend.from, weekend.to],
+    queryFn: () => fetchPlannedDisruptions(weekend.from, weekend.to),
+    staleTime: 30 * 60_000,
+  });
+  const [watched, setWatched] = useStoredState<string[]>(STORAGE_KEYS.watchedLines, []);
+  const [notificationNote, setNotificationNote] = useState<string | null>(null);
+
+  const toggleWatch = async (lineId: string) => {
+    const enabling = !watched.includes(lineId);
+    setWatched((current) => toggleInList(current, lineId, (a, b) => a === b));
+    if (enabling && typeof Notification !== "undefined" && Notification.permission === "default") {
+      const permission = await Notification.requestPermission();
+      setNotificationNote(
+        permission === "granted"
+          ? null
+          : "Browser notifications are off, so alerts will only show while this site is open.",
+      );
+    }
+  };
+
   const disrupted =
     data?.filter((l) => l.lineStatuses.some((s) => s.statusSeverity !== 10)).length ?? 0;
 
@@ -60,7 +90,7 @@ function Index() {
         </div>
       </section>
 
-      <main className="mx-auto max-w-6xl px-5 py-14">
+      <main id="main-content" className="mx-auto max-w-6xl px-5 py-14">
         <div className="mb-6 flex items-end justify-between gap-4">
           <h2 className="font-display text-2xl font-bold">Line status</h2>
           {dataUpdatedAt > 0 && (
@@ -70,6 +100,11 @@ function Index() {
           )}
         </div>
         {error && <p className="text-destructive">Couldn't load live status. Retrying…</p>}
+        {notificationNote && (
+          <p className="mb-4 text-sm text-muted-foreground" role="status">
+            {notificationNote}
+          </p>
+        )}
         <div className="grid gap-3 md:grid-cols-2">
           {isLoading &&
             Array.from({ length: 12 }).map((_, i) => (
@@ -88,11 +123,31 @@ function Index() {
                 <div className="flex-1 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-display text-lg font-semibold">{line.name}</h3>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 font-mono text-xs ${good ? "bg-good/15 text-good" : "bg-warn/15 text-warn"}`}
-                    >
-                      {s.statusSeverityDescription}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void toggleWatch(line.id)}
+                        aria-pressed={watched.includes(line.id)}
+                        aria-label={
+                          watched.includes(line.id)
+                            ? `Stop alerts for ${line.name}`
+                            : `Alert me about ${line.name}`
+                        }
+                        title={watched.includes(line.id) ? "Stop alerts" : "Alert me about changes"}
+                        className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                      >
+                        {watched.includes(line.id) ? (
+                          <BellRing size={15} className="text-primary" aria-hidden="true" />
+                        ) : (
+                          <Bell size={15} aria-hidden="true" />
+                        )}
+                      </button>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 font-mono text-xs ${good ? "bg-good/15 text-good" : "bg-warn/15 text-warn"}`}
+                      >
+                        {s.statusSeverityDescription}
+                      </span>
+                    </div>
                   </div>
                   {s.reason && (
                     <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{s.reason}</p>
@@ -102,6 +157,37 @@ function Index() {
             );
           })}
         </div>
+        {weekendLines && weekendLines.length > 0 && (
+          <section className="mt-12" aria-labelledby="planned-heading">
+            <h2 id="planned-heading" className="font-display text-2xl font-bold">
+              Planned closures ·{" "}
+              {weekend.from === weekend.to ? weekend.from : `${weekend.from} to ${weekend.to}`}
+            </h2>
+            <ul className="mt-4 grid gap-3 md:grid-cols-2">
+              {weekendLines.map((line) => {
+                const status = line.lineStatuses.find((s) => s.statusSeverity !== 10);
+                return (
+                  <li
+                    key={line.id}
+                    className="flex overflow-hidden rounded-lg border border-border bg-card"
+                  >
+                    <div className="w-2 shrink-0" style={{ background: LINE_COLOURS[line.id] }} />
+                    <div className="p-4">
+                      <p className="font-display font-semibold">
+                        {line.name} · {status?.statusSeverityDescription}
+                      </p>
+                      {status?.reason && (
+                        <p className="mt-1 line-clamp-3 text-sm text-muted-foreground">
+                          {status.reason}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
         <div className="mt-12 rounded-xl border border-border bg-board p-8 md:flex md:items-center md:justify-between">
           <div>
             <p className="led-text text-sm uppercase">Next train</p>

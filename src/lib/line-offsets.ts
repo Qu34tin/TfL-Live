@@ -77,7 +77,12 @@ function dedupeParallelPaths(items: OffsetLinePath[]): OffsetLinePath[] {
       }
       return false;
     }).length;
-    if (item.path.length > 0 && covered >= item.path.length * DUPLICATE_RATIO && item.path.length > 1) continue;
+    if (
+      item.path.length > 0 &&
+      covered >= item.path.length * DUPLICATE_RATIO &&
+      item.path.length > 1
+    )
+      continue;
     for (const [x, y] of cells) claims.add(cellKey(x, y));
     result.push(item);
   }
@@ -107,7 +112,10 @@ function curveBridge(end: Coordinate, inner: Coordinate, target: Coordinate): Co
   const facing = (((tx * LON_SCALE) / tl) * toX + (ty / tl) * toY) / toLength;
   // A path end pointing away from its target would make the curve loop back on itself, so it joins straight instead.
   const reach = facing < 0.3 ? 0 : toLength * 0.5 * facing;
-  const control = [end[0] + ((tx * LON_SCALE) / tl) * reach / LON_SCALE, end[1] + (ty / tl) * reach];
+  const control = [
+    end[0] + (((tx * LON_SCALE) / tl) * reach) / LON_SCALE,
+    end[1] + (ty / tl) * reach,
+  ];
   const points: Coordinate[] = [];
   for (let i = 0; i <= 10; i++) {
     const t = i / 10;
@@ -178,7 +186,9 @@ function bridgeGaps(items: OffsetLinePath[]): OffsetLinePath[] {
         }
         if (best && !touching && bestD < BRIDGE_DEG) {
           const atStart = end === item.path[0];
-          const inner = atStart ? item.path[Math.min(item.path.length - 1, 4)] : item.path[Math.max(0, item.path.length - 5)];
+          const inner = atStart
+            ? item.path[Math.min(item.path.length - 1, 4)]
+            : item.path[Math.max(0, item.path.length - 5)];
           if (bestD > 0.0003 && facingTarget(end, inner, best) < 0.5) continue;
           bridges.push({ lineId, path: curveBridge(end, inner, best) });
         }
@@ -253,7 +263,11 @@ const chainLength = (chain: Coordinate[]) => {
 
 // Stitches rail fragments, then removes short dead-end spurs (sidings, crossovers, depot links) that would
 // otherwise draw as stray hooks next to the main line. Chain ends near a station are kept.
-export function cleanRailPaths(paths: Coordinate[][], stations: Coordinate[], spurMetres = 140): Coordinate[][] {
+export function cleanRailPaths(
+  paths: Coordinate[][],
+  stations: Coordinate[],
+  spurMetres = 140,
+): Coordinate[][] {
   let chains = stitchPaths(paths);
   const nearStation = (p: Coordinate) => stations.some((s) => metresBetween(s, p) < 90);
   for (let round = 0; round < 6; round++) {
@@ -279,11 +293,17 @@ export function cleanRailPaths(paths: Coordinate[][], stations: Coordinate[], sp
       const length = chainLength(chain);
       const startFree = isFree(chain[0], owner);
       const endFree = isFree(chain[chain.length - 1], owner);
-      if (startFree && endFree) return length >= 60 || nearStation(chain[0]) || nearStation(chain[chain.length - 1]);
+      if (startFree && endFree)
+        return length >= 60 || nearStation(chain[0]) || nearStation(chain[chain.length - 1]);
       if (!startFree && !endFree) {
         // Short loops and hooks that return near where they started are depot links or crossovers.
         const span = metresBetween(chain[0], chain[chain.length - 1]);
-        return !(length < 250 && length > 2.5 * span && !nearStation(chain[0]) && !nearStation(chain[chain.length - 1]));
+        return !(
+          length < 250 &&
+          length > 2.5 * span &&
+          !nearStation(chain[0]) &&
+          !nearStation(chain[chain.length - 1])
+        );
       }
       if (length >= spurMetres) return true;
       const free = startFree ? chain[0] : chain[chain.length - 1];
@@ -298,7 +318,9 @@ export function cleanRailPaths(paths: Coordinate[][], stations: Coordinate[], sp
     if (chain.length < 2) return;
     for (const atStart of [true, false]) {
       const end = atStart ? chain[0] : chain[chain.length - 1];
-      const inner = atStart ? chain[Math.min(chain.length - 1, 4)] : chain[Math.max(0, chain.length - 5)];
+      const inner = atStart
+        ? chain[Math.min(chain.length - 1, 4)]
+        : chain[Math.max(0, chain.length - 5)];
       let best: Coordinate | undefined;
       let bestD = Infinity;
       finished.forEach((other, index) => {
@@ -311,7 +333,12 @@ export function cleanRailPaths(paths: Coordinate[][], stations: Coordinate[], sp
           }
         }
       });
-      if (best && bestD > 1.5 && bestD < 260 && (bestD < 30 || facingTarget(end, inner, best) >= 0.5)) {
+      if (
+        best &&
+        bestD > 1.5 &&
+        bestD < 260 &&
+        (bestD < 30 || facingTarget(end, inner, best) >= 0.5)
+      ) {
         bridges.push(curveBridge(end, inner, best));
       }
     }
@@ -329,7 +356,8 @@ function removeLoops(chain: Coordinate[]): Coordinate[] {
     let travelled = 0;
     for (let j = i + 1; j < Math.min(chain.length, i + 80); j++) {
       travelled += metresBetween(chain[j - 1], chain[j]);
-      if (j > i + 2 && travelled > 25 && travelled < 400 && metresBetween(chain[i], chain[j]) < 12) jump = j;
+      if (j > i + 2 && travelled > 25 && travelled < 400 && metresBetween(chain[i], chain[j]) < 12)
+        jump = j;
     }
     i = jump > 0 ? jump : i + 1;
   }
@@ -343,7 +371,8 @@ export function routeThroughRail(
   pairs: { from: Coordinate; to: Coordinate; fallback: Coordinate[] }[],
 ): Coordinate[][] {
   const tolerance = 0.00003;
-  const nodeKey = (c: Coordinate) => `${Math.round(c[0] / tolerance)}:${Math.round(c[1] / tolerance)}`;
+  const nodeKey = (c: Coordinate) =>
+    `${Math.round(c[0] / tolerance)}:${Math.round(c[1] / tolerance)}`;
   const ids = new Map<string, number>();
   const coords: Coordinate[] = [];
   const edges: { to: number; w: number }[][] = [];
@@ -404,7 +433,11 @@ export function routeThroughRail(
   // Fragment ends that nearly touch another fragment count as connected track.
   const connected = new Set<string>();
   endpoints.forEach((id) => {
-    const other = nearest(coords[id], 15, (candidate) => candidate === id || edges[id].some((e) => e.to === candidate));
+    const other = nearest(
+      coords[id],
+      15,
+      (candidate) => candidate === id || edges[id].some((e) => e.to === candidate),
+    );
     if (other >= 0 && !connected.has(`${other}:${id}`)) {
       link(id, other);
       connected.add(`${id}:${other}`);
@@ -525,11 +558,16 @@ export function prepareOverlappingLines(items: OffsetLinePath[]): PreparedLines 
           ];
         }),
       }));
-      return bridgeGaps(shifted.map((item) => ({ ...item, path: roundCorners(item.path) }))).map((item) => ({ ...item, offset: 0 }));
+      return bridgeGaps(shifted.map((item) => ({ ...item, path: roundCorners(item.path) }))).map(
+        (item) => ({ ...item, offset: 0 }),
+      );
     },
   };
 }
 
-export function spreadOverlappingLines(items: OffsetLinePath[], slotMetres = 9): OffsetLineFeature[] {
+export function spreadOverlappingLines(
+  items: OffsetLinePath[],
+  slotMetres = 9,
+): OffsetLineFeature[] {
   return prepareOverlappingLines(items).at(slotMetres);
 }

@@ -1,11 +1,19 @@
-import { createFileRoute, ClientOnly } from "@tanstack/react-router";
-import { BusFront, Search, TrainFront, X } from "lucide-react";
+import { createFileRoute, ClientOnly, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Check, ListFilter, Search, TrainFront, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
-import { fetchAllStations, LINE_COLOURS, type Station } from "@/lib/tfl";
+import {
+  disruptionsFromStatus,
+  fetchAllStations,
+  fetchLineStatus,
+  LINE_COLOURS,
+  OVERGROUND_LINE_IDS,
+  type Station,
+  TUBE_LINES,
+} from "@/lib/tfl";
 
 const TubeMap = lazy(() => import("@/components/TubeMap"));
-const BusMap = lazy(() => import("@/components/BusMap"));
 
 export const Route = createFileRoute("/map")({
   head: () => ({
@@ -28,7 +36,6 @@ export const Route = createFileRoute("/map")({
 });
 
 function MapPage() {
-  const [busMode, setBusMode] = useState(false);
   const [overgroundEnabled, setOvergroundEnabled] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
@@ -36,6 +43,25 @@ function MapPage() {
   const [stationsLoading, setStationsLoading] = useState(true);
   const [stationSearchError, setStationSearchError] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showLines, setShowLines] = useState(false);
+  const [hiddenLines, setHiddenLines] = useState<string[]>([]);
+  const [expandedLine, setExpandedLine] = useState<string | null>(null);
+  const { data: lineStatus } = useQuery({
+    queryKey: ["status"],
+    queryFn: fetchLineStatus,
+    refetchInterval: 30_000,
+  });
+  const disruptions = useMemo(() => disruptionsFromStatus(lineStatus ?? []), [lineStatus]);
+  const mapLines = useMemo(
+    () => [
+      ...TUBE_LINES,
+      "elizabeth",
+      "dlr",
+      "tram",
+      ...(overgroundEnabled ? OVERGROUND_LINE_IDS : []),
+    ],
+    [overgroundEnabled],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -45,7 +71,8 @@ function MapPage() {
       })
       .catch((error: unknown) => {
         console.error("Unable to load stations for map search", error);
-        if (!cancelled) setStationSearchError("Station search is unavailable. Please try again later.");
+        if (!cancelled)
+          setStationSearchError("Station search is unavailable. Please try again later.");
       })
       .finally(() => {
         if (!cancelled) setStationsLoading(false);
@@ -70,13 +97,19 @@ function MapPage() {
   return (
     <div className="flex h-screen flex-col bg-background">
       <SiteHeader />
-      <main className="relative mx-3 mb-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/20 bg-[#f2f1eb] dark:border-neutral-700 dark:bg-[#111820] sm:mx-6">
-        {!busMode && (
+      <main
+        id="main-content"
+        aria-label="Live interactive London transport map. Open the Lines panel for a text alternative."
+        className="relative mx-3 mb-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/20 bg-[#f2f1eb] dark:border-neutral-700 dark:bg-[#111820] sm:mx-6"
+      >
+        {
           <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
             <div className="relative">
               <div className="flex w-[min(22rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
                 <Search size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
-                <label className="sr-only" htmlFor="map-station-search">Search for a station</label>
+                <label className="sr-only" htmlFor="map-station-search">
+                  Search for a station
+                </label>
                 <input
                   id="map-station-search"
                   type="text"
@@ -126,7 +159,11 @@ function MapPage() {
                   className="absolute z-10 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border border-border bg-popover py-1 shadow-2xl"
                 >
                   {suggestions.map((station) => (
-                    <li key={station.id} role="option" aria-selected={selectedStation?.id === station.id}>
+                    <li
+                      key={station.id}
+                      role="option"
+                      aria-selected={selectedStation?.id === station.id}
+                    >
                       <button
                         type="button"
                         onMouseDown={(event) => event.preventDefault()}
@@ -151,14 +188,14 @@ function MapPage() {
                     <li className="px-4 py-3 text-sm text-muted-foreground">
                       {stationsLoading
                         ? "Loading stations..."
-                        : stationSearchError ?? "No stations found."}
+                        : (stationSearchError ?? "No stations found.")}
                     </li>
                   )}
                 </ul>
               )}
             </div>
           </div>
-        )}
+        }
         <ClientOnly
           fallback={
             <div className="absolute inset-0 animate-pulse bg-[#f2f1eb] dark:bg-[#111820]" />
@@ -169,14 +206,140 @@ function MapPage() {
               <div className="absolute inset-0 animate-pulse bg-[#f2f1eb] dark:bg-[#111820]" />
             }
           >
-            {busMode ? (
-              <BusMap />
-            ) : (
-              <TubeMap overgroundEnabled={overgroundEnabled} selectedStation={selectedStation} />
-            )}
+            <TubeMap
+              overgroundEnabled={overgroundEnabled}
+              selectedStation={selectedStation}
+              hiddenLines={hiddenLines}
+            />
           </Suspense>
         </ClientOnly>
-        {!busMode && (
+        {showLines && (
+          <section
+            id="map-lines-panel"
+            aria-label="Lines, status and filters"
+            className="absolute bottom-12 right-16 z-20 flex max-h-[55%] w-[min(15.5rem,calc(100vw-6rem))] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100"
+          >
+            <div className="flex items-center gap-1.5 border-b border-neutral-200 px-2.5 py-1.5 dark:border-neutral-700">
+              <h2 className="mr-auto font-display text-xs font-bold uppercase tracking-wider">
+                Lines
+                <span className="ml-1.5 font-mono font-normal normal-case tracking-normal text-neutral-500 dark:text-neutral-400">
+                  {mapLines.length - hiddenLines.length}/{mapLines.length}
+                </span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => setHiddenLines([])}
+                className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setHiddenLines(
+                    mapLines.filter((id) => {
+                      const severity = lineStatus?.find((l) => l.id === id)?.lineStatuses[0]
+                        ?.statusSeverity;
+                      return severity === undefined || severity === 10;
+                    }),
+                  )
+                }
+                className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700"
+              >
+                Disrupted
+              </button>
+              <button
+                type="button"
+                aria-label="Close lines panel"
+                onClick={() => setShowLines(false)}
+                className="rounded-full p-1 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            </div>
+            <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+              {mapLines.map((lineId) => {
+                const status = lineStatus?.find((line) => line.id === lineId);
+                const current = status?.lineStatuses[0];
+                const severity = current?.statusSeverity ?? 10;
+                const good = severity === 10;
+                const visible = !hiddenLines.includes(lineId);
+                const expanded = expandedLine === lineId;
+                const tone = good
+                  ? "bg-green-500"
+                  : severity <= 6 || severity === 20
+                    ? "bg-red-500"
+                    : severity === 9 || severity === 8
+                      ? "bg-amber-400"
+                      : "bg-blue-500";
+                const shortStatus = (current?.statusSeverityDescription ?? "")
+                  .replace(" Delays", "")
+                  .replace("Planned Closure", "Closure")
+                  .replace("Part Closure", "Part closed");
+                const colour = LINE_COLOURS[lineId] ?? "#888";
+                const name = status?.name ?? lineId.replace(/-/g, " ");
+                return (
+                  <li key={lineId}>
+                    <div className="flex items-center gap-2 px-2.5 py-[3px]">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={visible}
+                        aria-label={`Show ${name} on map`}
+                        onClick={() =>
+                          setHiddenLines((existing) =>
+                            existing.includes(lineId)
+                              ? existing.filter((id) => id !== lineId)
+                              : [...existing, lineId],
+                          )
+                        }
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        style={{
+                          borderColor: colour,
+                          background: visible ? colour : "transparent",
+                        }}
+                      >
+                        {visible && (
+                          <Check
+                            size={11}
+                            strokeWidth={3.5}
+                            aria-hidden="true"
+                            className="text-white drop-shadow-[0_0_1px_rgba(0,0,0,0.9)]"
+                          />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={good || !current?.reason}
+                        aria-expanded={expanded}
+                        onClick={() => setExpandedLine(expanded ? null : lineId)}
+                        className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md text-left text-xs enabled:hover:text-neutral-600 enabled:dark:hover:text-neutral-300 ${visible ? "" : "opacity-45"}`}
+                      >
+                        <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+                        {!good && (
+                          <span className="shrink-0 text-[10px] text-neutral-500 dark:text-neutral-400">
+                            {shortStatus}
+                          </span>
+                        )}
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${tone}`}
+                          title={current?.statusSeverityDescription ?? "Good Service"}
+                          aria-label={current?.statusSeverityDescription ?? "Good Service"}
+                        />
+                      </button>
+                    </div>
+                    {expanded && current?.reason && (
+                      <p className="mx-2.5 mb-1 rounded-lg bg-neutral-100 px-2 py-1.5 text-[11px] leading-snug text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
+                        {current.reason}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+        {
           <>
             <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-white/80 bg-white/90 px-3 py-1.5 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
               <p className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-red-600">
@@ -189,14 +352,38 @@ function MapPage() {
               <p>Click a station for accessibility info</p>
             </div>
           </>
-        )}
+        }
         <div className="absolute bottom-12 right-3 z-20 flex flex-col items-center gap-2">
-          {!busMode && (
+          {
+            <button
+              type="button"
+              onClick={() => setShowLines((current) => !current)}
+              aria-pressed={showLines}
+              aria-expanded={showLines}
+              aria-controls="map-lines-panel"
+              aria-label="Lines, status and filters"
+              className={`relative inline-flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                showLines
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-white/80 bg-white/95 text-neutral-900 hover:bg-neutral-100 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              }`}
+            >
+              <ListFilter size={18} aria-hidden="true" />
+              {disruptions.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-black">
+                  {disruptions.length}
+                </span>
+              )}
+            </button>
+          }
+          {
             <button
               type="button"
               onClick={() => setOvergroundEnabled((current) => !current)}
               aria-pressed={overgroundEnabled}
-              aria-label={overgroundEnabled ? "Hide London Overground lines" : "Show London Overground lines"}
+              aria-label={
+                overgroundEnabled ? "Hide London Overground lines" : "Show London Overground lines"
+              }
               className={`group relative inline-flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc72c] ${
                 overgroundEnabled
                   ? "border-[#ffc72c] bg-[#ffc72c] text-neutral-900"
@@ -205,40 +392,22 @@ function MapPage() {
             >
               <TrainFront size={18} aria-hidden="true" />
               <span className="pointer-events-none absolute right-full mr-2 hidden whitespace-nowrap rounded-lg border border-white/80 bg-white/95 px-2 py-1 text-xs font-medium text-neutral-900 shadow-lg backdrop-blur group-hover:block dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100">
-                {overgroundEnabled ? "Hide London Overground lines" : "Show London Overground lines"}
+                {overgroundEnabled
+                  ? "Hide London Overground lines"
+                  : "Show London Overground lines"}
               </span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setBusMode((current) => !current)}
-            aria-label={busMode ? "Switch to Tube mode" : "Switch to bus mode"}
-            className="group hidden h-11 w-11 items-center justify-center rounded-lg border border-white/80 bg-white/95 text-neutral-900 shadow-lg backdrop-blur transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-red-950"
-            style={{ display: "none" }}
-          >
-            {busMode ? (
-              <TrainFront size={20} aria-hidden="true" />
-            ) : (
-              <BusFront size={20} aria-hidden="true" />
-            )}
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute right-full mr-2 whitespace-nowrap rounded-md bg-neutral-900 px-2.5 py-1.5 font-mono text-xs font-medium text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-            >
-              {busMode ? "Switch to Tube mode" : "Switch to bus mode"}
-            </span>
-          </button>
+          }
         </div>
       </main>
       <footer className="flex min-h-7 shrink-0 flex-wrap items-center justify-center px-4 py-1 text-center font-mono text-[10px] text-muted-foreground">
-        {busMode
-          ? "Live Bus Map"
-          : overgroundEnabled
-            ? "Live Tube + Overground Map"
-            : "Live Tube Map"}{" "}
+        {overgroundEnabled ? "Live Tube + Overground Map" : "Live Tube Map"}{" "}
         <span className="mx-2 text-muted-foreground/60">·</span> Map data © MapTiler and
         OpenStreetMap contributors <span className="mx-2 text-muted-foreground/60">·</span> Live
-        transport data from TfL
+        transport data from TfL <span className="mx-2 text-muted-foreground/60">·</span>
+        <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
+          Privacy &amp; terms
+        </Link>
       </footer>
     </div>
   );

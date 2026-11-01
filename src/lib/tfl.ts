@@ -49,6 +49,206 @@ export type Arrival = {
   timeToStation: number;
 };
 
+export type JourneyLeg = {
+  duration?: number;
+  instruction?: { summary?: string; detailed?: string };
+  mode?: { id?: string; name?: string };
+  line?: { id?: string; name?: string };
+  routeOptions?: { name?: string }[];
+  departurePoint?: { commonName?: string };
+  arrivalPoint?: { commonName?: string };
+  departureTime?: string;
+  arrivalTime?: string;
+  isDisrupted?: boolean;
+  disruptions?: { description?: string; categoryDescription?: string }[];
+};
+
+export type Journey = {
+  startDateTime?: string;
+  arrivalDateTime?: string;
+  duration: number;
+  legs?: JourneyLeg[];
+  fare?: { totalCost?: number };
+};
+
+export const JOURNEY_MODES = [
+  { id: "tube", label: "Tube" },
+  { id: "elizabeth-line", label: "Elizabeth line" },
+  { id: "overground", label: "Overground" },
+  { id: "dlr", label: "DLR" },
+  { id: "tram", label: "Tram" },
+  { id: "national-rail", label: "National Rail" },
+  { id: "cable-car", label: "Cable car" },
+] as const;
+
+export type JourneyPreference = "LeastTime" | "LeastInterchange" | "LeastWalking";
+export type AccessibilityPreference =
+  "StepFreeToVehicle" | "StepFreeToPlatform" | "NoSolidStairs" | "NoEscalators" | "NoElevators";
+
+export type JourneyOptions = {
+  /** Local date and time as `YYYY-MM-DDTHH:mm`; empty means "now". */
+  when?: string | undefined;
+  timeIs?: "Departing" | "Arriving" | undefined;
+  preference?: JourneyPreference | undefined;
+  accessibility?: AccessibilityPreference | undefined;
+  modes?: string[] | undefined;
+  avoidLines?: string[] | undefined;
+};
+
+const DEFAULT_JOURNEY_MODES = [
+  "tube",
+  "dlr",
+  "overground",
+  "elizabeth-line",
+  "tram",
+  "cable-car",
+  "national-rail",
+];
+
+export function buildJourneyUrl(from: string, to: string, options: JourneyOptions = {}) {
+  const query = new URLSearchParams({
+    mode: (options.modes?.length ? options.modes : DEFAULT_JOURNEY_MODES).join(","),
+  });
+  const when = options.when?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (when) {
+    query.set("date", `${when[1]}${when[2]}${when[3]}`);
+    query.set("time", `${when[4]}${when[5]}`);
+    query.set("timeIs", options.timeIs ?? "Departing");
+  }
+  if (options.preference) query.set("journeyPreference", options.preference);
+  if (options.accessibility) query.set("accessibilityPreference", options.accessibility);
+  return `${API}/Journey/JourneyResults/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}?${query}`;
+}
+
+type DisambiguationOption = { parameterValue?: string; matchQuality?: number };
+type JourneyResponse = {
+  journeys?: Journey[];
+  fromLocationDisambiguation?: { disambiguationOptions?: DisambiguationOption[] };
+  toLocationDisambiguation?: { disambiguationOptions?: DisambiguationOption[] };
+};
+
+function bestMatch(options?: DisambiguationOption[]) {
+  return [...(options ?? [])].sort((a, b) => (b.matchQuality ?? 0) - (a.matchQuality ?? 0))[0]
+    ?.parameterValue;
+}
+
+export function filterJourneysByAvoidedLines(journeys: Journey[], avoidLines: string[] = []) {
+  if (avoidLines.length === 0) return journeys;
+  return journeys.filter(
+    (journey) => !journey.legs?.some((leg) => leg.line?.id && avoidLines.includes(leg.line.id)),
+  );
+}
+
+export function formatFare(pence?: number) {
+  return typeof pence === "number" ? `£${(pence / 100).toFixed(2)}` : null;
+}
+
+export async function fetchJourneys(
+  from: string,
+  to: string,
+  options: JourneyOptions = {},
+): Promise<Journey[]> {
+  let response = await fetch(buildJourneyUrl(from, to, options));
+  // Free-text places (postcodes, addresses) can come back as an ambiguous match.
+  if (response.status === 300) {
+    const ambiguous: JourneyResponse = await response.json();
+    const resolvedFrom = bestMatch(ambiguous.fromLocationDisambiguation?.disambiguationOptions);
+    const resolvedTo = bestMatch(ambiguous.toLocationDisambiguation?.disambiguationOptions);
+    response = await fetch(buildJourneyUrl(resolvedFrom ?? from, resolvedTo ?? to, options));
+  }
+  if (!response.ok) throw new Error(`Journey planner unavailable (${response.status})`);
+  const result: JourneyResponse = await response.json();
+  return filterJourneysByAvoidedLines(result.journeys ?? [], options.avoidLines);
+}
+
+export type StationCrowding = { percentageOfBaseline: number; timeUtc?: string | undefined };
+
+export async function fetchStationCrowding(naptanId: string): Promise<StationCrowding | null> {
+  const response = await fetch(`${API}/crowding/${encodeURIComponent(naptanId)}/Live`);
+  if (!response.ok) return null;
+  const data: { dataAvailable?: boolean; percentageOfBaseline?: number; timeUtc?: string } =
+    await response.json();
+  if (!data.dataAvailable || typeof data.percentageOfBaseline !== "number") return null;
+  return { percentageOfBaseline: data.percentageOfBaseline, timeUtc: data.timeUtc };
+}
+
+export function crowdingLabel(percentageOfBaseline: number) {
+  if (percentageOfBaseline < 0.4) return { label: "Quiet", tone: "good" as const };
+  if (percentageOfBaseline < 0.7) return { label: "Moderately busy", tone: "warn" as const };
+  return { label: "Very busy", tone: "bad" as const };
+}
+
+export type LineDisruption = {
+  lineId: string;
+  lineName: string;
+  status: string;
+  reason?: string | undefined;
+  severity: number;
+};
+
+export function disruptionsFromStatus(lines: LineStatus[]): LineDisruption[] {
+  return lines.flatMap((line) => {
+    const status = line.lineStatuses.find((s) => s.statusSeverity !== 10);
+    return status
+      ? [
+          {
+            lineId: line.id,
+            lineName: line.name,
+            status: status.statusSeverityDescription,
+            reason: status.reason,
+            severity: status.statusSeverity,
+          },
+        ]
+      : [];
+  });
+}
+
+export function nextWeekendRange(now = new Date()) {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay();
+  start.setDate(start.getDate() + (day === 0 ? 0 : 6 - day));
+  const end = new Date(start);
+  if (day !== 0) end.setDate(end.getDate() + 1);
+  const iso = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return { from: iso(start), to: iso(end) };
+}
+
+export async function fetchPlannedDisruptions(from: string, to: string): Promise<LineStatus[]> {
+  const response = await fetch(
+    `${API}/Line/Mode/tube,elizabeth-line,dlr,overground/Status/${from}/to/${to}`,
+  );
+  if (!response.ok) throw new Error(`Planned closures unavailable (${response.status})`);
+  const lines: LineStatus[] = await response.json();
+  return lines.filter((line) => line.lineStatuses.some((s) => s.statusSeverity !== 10));
+}
+
+export function distanceMetres(aLat: number, aLon: number, bLat: number, bLon: number) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLon = toRad(bLon - aLon);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+
+export function nearestStations(
+  stations: Station[],
+  lat: number,
+  lon: number,
+  count = 5,
+): (Station & { distance: number })[] {
+  return stations
+    .map((station) => ({
+      ...station,
+      distance: distanceMetres(lat, lon, station.lat, station.lon),
+    }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, count);
+}
+
 export async function fetchLineStatus(): Promise<LineStatus[]> {
   const [tubeResponse, elizabethResponse, dlrResponse, tramResponse, overgroundResponse] =
     await Promise.all([
@@ -122,10 +322,19 @@ export function minutes(sec: number) {
   return m <= 0 ? "Due" : `${m} min`;
 }
 
-export const TUBE_LINES = Object.keys(LINE_COLOURS).filter(
-  (line) =>
-    line !== "elizabeth" && !OVERGROUND_LINE_IDS.some((overgroundLine) => overgroundLine === line),
-);
+export const TUBE_LINES = [
+  "bakerloo",
+  "central",
+  "circle",
+  "district",
+  "hammersmith-city",
+  "jubilee",
+  "metropolitan",
+  "northern",
+  "piccadilly",
+  "victoria",
+  "waterloo-city",
+];
 const BOARD_LINES = Object.keys(LINE_COLOURS);
 
 export type Station = {

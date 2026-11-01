@@ -15,11 +15,11 @@ describe("App routing", () => {
     expect(matches.at(-1)?.routeId).not.toBe(rootRouteId);
   });
 
-  it("matches the live bus map route", () => {
+  it("no longer has a bus route", () => {
     const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
 
     const matches = router.matchRoutes("/bus");
 
-    expect(matches.at(-1)?.routeId).toBe("/bus");
+    expect(matches.at(-1)?.routeId).toBe(rootRouteId);
   });
 });
