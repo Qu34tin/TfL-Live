@@ -95,7 +95,7 @@ function MapPage() {
   };
 
   return (
-    <div className="flex h-screen flex-col bg-background">
+    <div className="flex h-dvh flex-col bg-background">
       <SiteHeader />
       <main
         id="main-content"
@@ -134,7 +134,7 @@ function MapPage() {
                     }
                   }}
                   placeholder="Search stations"
-                  className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  className="h-10 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
                 />
                 {searchQuery && (
                   <button
@@ -217,7 +217,7 @@ function MapPage() {
           <section
             id="map-lines-panel"
             aria-label="Lines, status and filters"
-            className="absolute bottom-12 right-16 z-20 flex max-h-[55%] w-[min(15.5rem,calc(100vw-6rem))] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100"
+            className="absolute bottom-12 right-14 z-20 flex max-h-[55%] w-[min(17rem,calc(100vw-5rem))] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100"
           >
             <div className="flex items-center gap-1.5 border-b border-neutral-200 px-2.5 py-1.5 dark:border-neutral-700">
               <h2 className="mr-auto font-display text-xs font-bold uppercase tracking-wider">

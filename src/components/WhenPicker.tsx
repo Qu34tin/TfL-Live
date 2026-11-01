@@ -46,7 +46,7 @@ export function WhenPicker({ value, onChange }: { value: string; onChange: (v: s
     "inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
       <div className="inline-flex items-center gap-1 rounded-full border border-border bg-background p-1">
         <button
           type="button"
@@ -71,7 +71,7 @@ export function WhenPicker({ value, onChange }: { value: string; onChange: (v: s
           <Plus size={14} aria-hidden="true" />
         </button>
       </div>
-      <div className="flex max-w-full gap-1 overflow-x-auto pb-0.5">
+      <div className="flex min-w-0 max-w-full gap-1 overflow-x-auto pb-0.5">
         {days.map((day, index) => {
           const active = Boolean(value) && day.getTime() === selectedDay;
           return (

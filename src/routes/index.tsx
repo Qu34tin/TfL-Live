@@ -60,14 +60,14 @@ function Index() {
     data?.filter((l) => l.lineStatuses.some((s) => s.statusSeverity !== 10)).length ?? 0;
 
   return (
-    <div className="h-screen overflow-y-auto hide-scrollbar">
+    <div className="min-h-dvh">
       <SiteHeader />
       <section className="track-lines border-b border-border">
         <div className="mx-auto max-w-6xl px-5 py-20 md:py-28">
           <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 font-mono text-xs uppercase tracking-widest text-muted-foreground">
             <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-good" /> Live
           </p>
-          <h1 className="max-w-3xl font-display text-5xl font-extrabold leading-[0.95] tracking-tight md:text-7xl">
+          <h1 className="max-w-3xl font-display text-4xl font-extrabold leading-[0.95] tracking-tight sm:text-5xl md:text-7xl">
             The whole Tube, <span className="text-primary">right now.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg text-muted-foreground">

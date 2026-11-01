@@ -328,7 +328,7 @@ function Boards() {
   }, [allStations]);
 
   return (
-    <div className="h-screen overflow-y-auto hide-scrollbar">
+    <div className="min-h-dvh">
       <SiteHeader />
       <main id="main-content" className="mx-auto max-w-6xl px-5 py-14">
         <h1 className="font-display text-4xl font-extrabold tracking-tight md:text-5xl">
@@ -361,7 +361,7 @@ function Boards() {
           </div>
           <div className="p-4 sm:p-5">
             <form
-              className="grid gap-3 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-end"
+              className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-end"
               onSubmit={(event) => {
                 event.preventDefault();
                 runSearch();
@@ -435,7 +435,7 @@ function Boards() {
                 <summary className="cursor-pointer text-sm font-medium">
                   Route preferences, step-free and lines to avoid
                 </summary>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="space-y-1.5 text-sm font-medium">
                     <p>Route preference</p>
                     <Segmented<JourneyPreference | "">
