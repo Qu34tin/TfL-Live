@@ -1018,7 +1018,12 @@ function JourneyStationPicker({
   };
 
   return (
-    <div className={`relative ${open && results.length > 0 ? "z-20" : ""}`}>
+    <div
+      className={`relative ${open && results.length > 0 ? "z-20" : ""}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
       <label htmlFor={id} className="flex items-center justify-between text-sm font-medium">
         {label}
         <button
@@ -1039,7 +1044,6 @@ function JourneyStationPicker({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
         placeholder="Station, postcode or address"
         autoComplete="off"
         className="mt-1.5 w-full rounded-full border border-border bg-background px-5 py-3 text-base outline-none placeholder:text-muted-foreground focus:border-primary"
@@ -1050,7 +1054,8 @@ function JourneyStationPicker({
             <li key={station.id}>
               <button
                 type="button"
-                onMouseDown={() => pick(station)}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => pick(station)}
                 className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left hover:bg-secondary"
               >
                 <span>{station.name}</span>
