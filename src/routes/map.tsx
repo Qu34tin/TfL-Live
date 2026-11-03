@@ -1,6 +1,6 @@
 import { createFileRoute, ClientOnly, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ListFilter, Search, TrainFront, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ListFilter, Search, TrainFront, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
 import { clearJourneyRoute, loadJourneyRoute, type JourneyRoute } from "@/lib/journey-route";
@@ -36,6 +36,106 @@ export const Route = createFileRoute("/map")({
   component: MapPage,
 });
 
+function JourneyPanel({
+  route,
+  activeStep,
+  onSelect,
+  onClear,
+}: {
+  route: JourneyRoute;
+  activeStep: number | null;
+  onSelect: (step: number | null) => void;
+  onClear: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const first = route.stops[0]?.name;
+  const last = route.stops[route.stops.length - 1]?.name;
+  const changes = Math.max(0, route.steps.filter((step) => !step.walking).length - 1);
+  return (
+    <section
+      aria-label="Journey instructions"
+      className="absolute inset-x-3 bottom-3 z-20 flex max-h-[50%] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100 sm:inset-x-auto sm:left-3 sm:w-[22rem]"
+    >
+      <div className="flex items-start gap-2 px-3.5 pb-2 pt-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">
+            {first} <span className="text-neutral-400">→</span> {last}
+          </p>
+          <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+            <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+              {route.duration} min
+            </span>
+            {" · "}
+            {changes === 0 ? "No changes" : `${changes} change${changes > 1 ? "s" : ""}`}
+          </p>
+        </div>
+        <button
+          type="button"
+          aria-label={collapsed ? "Show journey steps" : "Hide journey steps"}
+          onClick={() => setCollapsed((value) => !value)}
+          className="rounded-full p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        >
+          {collapsed ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+        <button
+          type="button"
+          aria-label="Clear journey"
+          onClick={onClear}
+          className="rounded-full p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div className="flex gap-1 px-3.5 pb-2.5" aria-hidden="true">
+        {route.steps.map((step, index) => (
+          <span
+            key={index}
+            className="h-1.5 rounded-full"
+            style={{ background: step.colour, flexGrow: Math.max(step.minutes ?? 1, 1) }}
+          />
+        ))}
+      </div>
+      {!collapsed && (
+        <ol className="min-h-0 flex-1 overflow-y-auto border-t border-neutral-200 py-1.5 dark:border-neutral-700">
+          {route.steps.map((step, index) => {
+            const active = activeStep === index;
+            return (
+              <li key={index}>
+                <button
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => onSelect(active ? null : index)}
+                  className={`flex w-full items-start gap-3 px-3.5 py-2 text-left transition-colors ${active ? "bg-neutral-100 dark:bg-neutral-800" : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"}`}
+                >
+                  <span
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                    style={{ background: step.colour }}
+                  >
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 text-xs">
+                    <span className="block text-[13px] font-semibold leading-tight">
+                      {step.instruction}
+                    </span>
+                    <span className="mt-0.5 block text-neutral-500 dark:text-neutral-400">
+                      {step.from} → {step.to}
+                    </span>
+                  </span>
+                  {step.minutes !== undefined && (
+                    <span className="shrink-0 font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                      {step.minutes} min
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function MapPage() {
   const [overgroundEnabled, setOvergroundEnabled] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -48,6 +148,7 @@ function MapPage() {
   const [hiddenLines, setHiddenLines] = useState<string[]>([]);
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
   const [journeyRoute, setJourneyRoute] = useState<JourneyRoute | null>(null);
+  const [activeStep, setActiveStep] = useState<number | null>(null);
   useEffect(() => {
     setJourneyRoute(loadJourneyRoute());
   }, []);
@@ -216,23 +317,21 @@ function MapPage() {
               selectedStation={selectedStation}
               hiddenLines={hiddenLines}
               journeyRoute={journeyRoute}
+              activeStep={activeStep}
             />
           </Suspense>
         </ClientOnly>
         {journeyRoute && (
-          <div className="absolute left-3 top-14 z-20">
-            <button
-              type="button"
-              onClick={() => {
-                clearJourneyRoute();
-                setJourneyRoute(null);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/80 bg-white/95 px-3 py-1.5 text-xs font-medium text-neutral-900 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100"
-            >
-              <X size={13} aria-hidden="true" />
-              Clear journey
-            </button>
-          </div>
+          <JourneyPanel
+            route={journeyRoute}
+            activeStep={activeStep}
+            onSelect={setActiveStep}
+            onClear={() => {
+              clearJourneyRoute();
+              setJourneyRoute(null);
+              setActiveStep(null);
+            }}
+          />
         )}
         {showLines && (
           <section
@@ -367,11 +466,13 @@ function MapPage() {
                 <span className="pulse-dot h-2 w-2 rounded-full bg-red-500" /> Live
               </p>
             </div>
-            <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/80 bg-white/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-200">
-              <p>Right-drag to orbit</p>
-              <p>Zoom in for buildings</p>
-              <p>Click a station for accessibility info</p>
-            </div>
+            {!journeyRoute && (
+              <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/80 bg-white/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-200">
+                <p>Right-drag to orbit</p>
+                <p>Zoom in for buildings</p>
+                <p>Click a station for accessibility info</p>
+              </div>
+            )}
           </>
         }
         <div className="absolute bottom-12 right-3 z-20 flex flex-col items-center gap-2">

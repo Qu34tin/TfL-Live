@@ -65,21 +65,32 @@ function getLineBadgeHtml(lineId: string) {
   return `<li class="station-accessibility__line" style="--line-color:${color};--line-text-color:${textColor}">${escapeHtml(label)}</li>`;
 }
 
+// Keeps the route clear of the journey panel (side panel on desktop, bottom sheet on phones).
+function journeyPadding() {
+  const wide = window.innerWidth >= 640;
+  return wide
+    ? { top: 90, right: 80, bottom: 70, left: 400 }
+    : { top: 90, right: 40, bottom: Math.round(window.innerHeight * 0.5), left: 40 };
+}
+
 export default function TubeMap({
   overgroundEnabled,
   selectedStation,
   hiddenLines = [],
   journeyRoute = null,
+  activeStep = null,
 }: {
   overgroundEnabled: boolean;
   selectedStation: Station | null;
   hiddenLines?: string[];
   journeyRoute?: JourneyRoute | null;
+  activeStep?: number | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overgroundEnabledRef = useRef(overgroundEnabled);
   const hiddenLinesRef = useRef(hiddenLines);
+  const journeyActiveRef = useRef(Boolean(journeyRoute));
   const applyLineFilterRef = useRef<() => void>(() => undefined);
   const cameraRef = useRef<{
     center: [number, number];
@@ -110,12 +121,21 @@ export default function TubeMap({
       "journey-route-casing",
       "journey-route-line",
       "journey-route-walk",
-      "journey-route-stops",
+      "journey-line-labels",
+      "journey-stops-ring",
+      "journey-stops-end",
+      "journey-stop-names",
     ];
     for (const id of layerIds) if (map.getLayer(id)) map.removeLayer(id);
     if (map.getSource(sourceId)) map.removeSource(sourceId);
-    if (!journeyRoute || journeyRoute.segments.length === 0) return;
+    if (!journeyRoute || journeyRoute.segments.length === 0) return undefined;
 
+    const isLight = (hex: string) => {
+      const value = Number.parseInt(hex.replace("#", ""), 16);
+      const luminance =
+        0.299 * ((value >> 16) & 255) + 0.587 * ((value >> 8) & 255) + 0.114 * (value & 255);
+      return luminance > 150;
+    };
     map.addSource(sourceId, {
       type: "geojson",
       data: {
@@ -123,61 +143,260 @@ export default function TubeMap({
         features: [
           ...journeyRoute.segments.map((segment) => ({
             type: "Feature" as const,
-            properties: { colour: segment.colour, walking: segment.walking },
+            properties: {
+              colour: segment.colour,
+              textColour: isLight(segment.colour) ? "#111827" : "#ffffff",
+              walking: segment.walking,
+              step: segment.step,
+              name: segment.label,
+            },
             geometry: { type: "LineString" as const, coordinates: segment.coordinates },
           })),
-          ...journeyRoute.stops.map((stop) => ({
-            type: "Feature" as const,
-            properties: { stop: true },
-            geometry: { type: "Point" as const, coordinates: stop.coordinates },
-          })),
+          ...journeyRoute.stops.map((stop, index) => {
+            const steps = journeyRoute.steps;
+            const toStep = stop.kind === "end" ? steps[steps.length - 1] : steps[stop.number ?? 0];
+            const fromStep = stop.kind === "interchange" ? steps[(stop.number ?? 1) - 1] : toStep;
+            return {
+              type: "Feature" as const,
+              properties: {
+                kind: stop.kind,
+                name: stop.name,
+                number: stop.number === undefined ? "" : String(stop.number),
+                fromColour: fromStep?.colour ?? "#111827",
+                toColour: toStep?.colour ?? "#111827",
+                badges: [...new Set([fromStep, toStep])]
+                  .filter((step): step is NonNullable<typeof step> => Boolean(step))
+                  .map(
+                    (step) =>
+                      `<li class="station-accessibility__line" style="--line-color:${step.colour};--line-text-color:${isLight(step.colour) ? "#1f2937" : "#ffffff"}">${escapeHtml(step.label)}</li>`,
+                  )
+                  .join(""),
+                // Lets end points win label collisions over interchanges.
+                priority: stop.kind === "interchange" ? index + 10 : index,
+              },
+              geometry: { type: "Point" as const, coordinates: stop.coordinates },
+            };
+          }),
         ],
       },
     });
+
+    const zoomWidth = (z9: number, z12: number, z15: number, z17: number) =>
+      [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        9,
+        z9,
+        12,
+        z12,
+        15,
+        z15,
+        17,
+        z17,
+      ] as maplibregl.ExpressionSpecification;
+    const isLine = ["==", ["geometry-type"], "LineString"] as maplibregl.ExpressionSpecification;
+    const solid = [
+      "all",
+      isLine,
+      ["!=", ["get", "walking"], true],
+    ] as maplibregl.FilterSpecification;
     const lineLayout = { "line-cap": "round" as const, "line-join": "round" as const };
+    const ink = isDark ? "#f8fafc" : "#111827";
+    const halo = isDark ? "rgba(10,14,20,0.92)" : "rgba(255,255,255,0.95)";
+    const font = ["Noto Sans Bold"];
+
     map.addLayer({
       id: "journey-route-casing",
       type: "line",
       source: sourceId,
-      filter: ["all", ["==", ["geometry-type"], "LineString"], ["!=", ["get", "walking"], true]],
+      filter: solid,
       layout: lineLayout,
-      paint: { "line-color": "#ffffff", "line-width": 11, "line-opacity": 0.95 },
+      paint: {
+        "line-color": isDark ? "#0a0e14" : "#ffffff",
+        "line-width": zoomWidth(6, 11, 17, 24),
+      },
     });
     map.addLayer({
       id: "journey-route-line",
       type: "line",
       source: sourceId,
-      filter: ["all", ["==", ["geometry-type"], "LineString"], ["!=", ["get", "walking"], true]],
+      filter: solid,
       layout: lineLayout,
-      paint: { "line-color": ["get", "colour"], "line-width": 6 },
+      paint: { "line-color": ["get", "colour"], "line-width": zoomWidth(3.5, 7, 12, 17) },
     });
     map.addLayer({
       id: "journey-route-walk",
       type: "line",
       source: sourceId,
-      filter: ["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "walking"], true]],
+      filter: ["all", isLine, ["==", ["get", "walking"], true]],
       layout: { "line-join": "round" },
-      paint: { "line-color": "#1d4ed8", "line-width": 4, "line-dasharray": [1, 1.6] },
+      paint: {
+        "line-color": isDark ? "#e2e8f0" : "#334155",
+        "line-width": zoomWidth(2, 3.5, 5, 7),
+        "line-dasharray": [0.6, 1.6],
+      },
     });
     map.addLayer({
-      id: "journey-route-stops",
+      id: "journey-line-labels",
+      type: "symbol",
+      source: sourceId,
+      filter: solid,
+      layout: {
+        "symbol-placement": "line",
+        "text-field": ["get", "name"],
+        "text-font": font,
+        "text-size": 11,
+        "text-letter-spacing": 0.04,
+        "text-keep-upright": true,
+        "symbol-spacing": 280,
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-max-angle": 40,
+      },
+      paint: {
+        "text-color": ["get", "textColour"],
+        "text-halo-color": ["get", "colour"],
+        "text-halo-width": 1,
+      },
+      minzoom: 9,
+    });
+
+    const stopFilter = ["==", ["geometry-type"], "Point"] as maplibregl.FilterSpecification;
+    const kindIs = (kind: string) =>
+      ["==", ["get", "kind"], kind] as maplibregl.ExpressionSpecification;
+    // Same station style as the live map (cream fill, dark ring) but sized by zoom,
+    // so points shrink when zooming out. Interchanges get a larger, heavier ring.
+    map.addLayer({
+      id: "journey-stops-ring",
       type: "circle",
       source: sourceId,
-      filter: ["==", ["geometry-type"], "Point"],
+      filter: stopFilter,
       paint: {
-        "circle-radius": 6,
-        "circle-color": "#ffffff",
-        "circle-stroke-color": "#111827",
-        "circle-stroke-width": 3,
+        "circle-radius": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          8,
+          ["case", kindIs("interchange"), 4, 3],
+          12,
+          ["case", kindIs("interchange"), 7, 5.5],
+          17,
+          ["case", kindIs("interchange"), 12, 10],
+        ],
+        "circle-color": "#faf8ef",
+        "circle-stroke-color": "#494b45",
+        "circle-stroke-width": ["case", kindIs("interchange"), 3, 2],
+      },
+    });
+    map.addLayer({
+      id: "journey-stops-end",
+      type: "circle",
+      source: sourceId,
+      filter: ["all", stopFilter, kindIs("end")] as maplibregl.FilterSpecification,
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 12, 2.5, 17, 5],
+        "circle-color": "#494b45",
       },
     });
 
-    const bounds = new maplibregl.LngLatBounds();
-    for (const segment of journeyRoute.segments) {
-      for (const coordinate of segment.coordinates) bounds.extend(coordinate);
+    map.addLayer({
+      id: "journey-stop-names",
+      type: "symbol",
+      source: sourceId,
+      filter: stopFilter,
+      minzoom: 10,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 12,
+        "text-anchor": "top",
+        "text-offset": [0, 0.9],
+        "text-max-width": 8,
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "symbol-sort-key": ["get", "priority"],
+      },
+      paint: {
+        "text-color": "#e8e6dc",
+        "text-halo-color": "rgba(12,14,18,0.92)",
+        "text-halo-width": 1.6,
+      },
+    });
+    const hoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      className: "tube-popup",
+      offset: 12,
+    });
+    const onStopMove = (event: maplibregl.MapLayerMouseEvent) => {
+      const properties = event.features?.[0]?.properties;
+      if (!properties) return;
+      const kind = String(properties["kind"]);
+      const eyebrow =
+        kind === "interchange" ? "Change here" : kind === "start" ? "Start" : "Destination";
+      map.getCanvas().style.cursor = "pointer";
+      hoverPopup
+        .setLngLat(event.lngLat)
+        .setHTML(
+          `<section class="station-accessibility"><p class="station-accessibility__eyebrow">${eyebrow}</p><h2 class="station-accessibility__title">${escapeHtml(String(properties["name"]))}</h2><ul class="station-accessibility__lines">${String(properties["badges"])}</ul></section>`,
+        )
+        .addTo(map);
+    };
+    const onStopLeave = () => {
+      map.getCanvas().style.cursor = "";
+      hoverPopup.remove();
+    };
+    map.on("mousemove", "journey-stops-ring", onStopMove);
+    map.on("mouseleave", "journey-stops-ring", onStopLeave);
+    return () => {
+      map.off("mousemove", "journey-stops-ring", onStopMove);
+      map.off("mouseleave", "journey-stops-ring", onStopLeave);
+      hoverPopup.remove();
+    };
+  }, [isDark, isMapReady, journeyRoute]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!isMapReady || !map || !journeyRoute) return;
+    const bounds = activeStep !== null ? journeyRoute.steps[activeStep]?.bounds : undefined;
+    if (!bounds) {
+      if (activeStep === null) {
+        const all = new maplibregl.LngLatBounds();
+        for (const segment of journeyRoute.segments) {
+          for (const coordinate of segment.coordinates) all.extend(coordinate);
+        }
+        map.fitBounds(all, { padding: journeyPadding(), duration: 900, maxZoom: 15, pitch: 0 });
+      }
+      return;
     }
-    map.fitBounds(bounds, { padding: 80, duration: 1200, maxZoom: 15, pitch: 30 });
-  }, [isMapReady, journeyRoute]);
+    map.fitBounds(
+      [
+        [bounds[0], bounds[1]],
+        [bounds[2], bounds[3]],
+      ],
+      { padding: journeyPadding(), duration: 900, maxZoom: 15.5, pitch: 0 },
+    );
+  }, [activeStep, isMapReady, journeyRoute]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!isMapReady || !map) return;
+    const fade = (on: number, off: number) =>
+      activeStep === null
+        ? on
+        : ([
+            "case",
+            ["==", ["get", "step"], activeStep],
+            on,
+            off,
+          ] as maplibregl.ExpressionSpecification);
+    if (map.getLayer("journey-route-line")) {
+      map.setPaintProperty("journey-route-line", "line-opacity", fade(1, 0.3));
+      map.setPaintProperty("journey-route-casing", "line-opacity", fade(0.9, 0.25));
+      map.setPaintProperty("journey-route-walk", "line-opacity", fade(1, 0.3));
+    }
+  }, [activeStep, isMapReady, journeyRoute]);
 
   useEffect(() => {
     const themeObserver = new MutationObserver(() => {
@@ -197,9 +416,15 @@ export default function TubeMap({
   }, [hiddenLines]);
 
   useEffect(() => {
+    journeyActiveRef.current = Boolean(journeyRoute);
+    applyLineFilterRef.current();
+  }, [journeyRoute]);
+
+  useEffect(() => {
     overgroundEnabledRef.current = overgroundEnabled;
     const map = mapRef.current;
     if (!map) return;
+    applyLineFilterRef.current();
     for (const layerId of [
       "overground-lines-glow",
       "overground-lines",
@@ -1107,6 +1332,19 @@ export default function TubeMap({
             map.setFilter(
               layerId,
               hidden.length > 0 ? ["!", ["in", ["get", "lineId"], ["literal", hidden]]] : null,
+            );
+          }
+          // While a journey is shown, hide every other line, station and train.
+          const journeyActive = journeyActiveRef.current;
+          for (const layerId of [...lineFilterLayerIds, "stations", "overground-stations"]) {
+            if (!map.getLayer(layerId)) continue;
+            const isOverground = layerId.startsWith("overground");
+            map.setLayoutProperty(
+              layerId,
+              "visibility",
+              !journeyActive && (!isOverground || overgroundEnabledRef.current)
+                ? "visible"
+                : "none",
             );
           }
         };

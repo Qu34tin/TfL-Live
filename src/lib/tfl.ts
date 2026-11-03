@@ -54,7 +54,7 @@ export type JourneyLeg = {
   instruction?: { summary?: string; detailed?: string };
   mode?: { id?: string; name?: string };
   line?: { id?: string; name?: string };
-  routeOptions?: { name?: string }[];
+  routeOptions?: { name?: string; lineIdentifier?: { id?: string } }[];
   departurePoint?: { commonName?: string; lat?: number; lon?: number };
   arrivalPoint?: { commonName?: string; lat?: number; lon?: number };
   path?: { lineString?: string };
