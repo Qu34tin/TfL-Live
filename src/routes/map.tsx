@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ListFilter, Search, TrainFront, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/SiteHeader";
+import { clearJourneyRoute, loadJourneyRoute, type JourneyRoute } from "@/lib/journey-route";
 import {
   disruptionsFromStatus,
   fetchAllStations,
@@ -46,6 +47,10 @@ function MapPage() {
   const [showLines, setShowLines] = useState(false);
   const [hiddenLines, setHiddenLines] = useState<string[]>([]);
   const [expandedLine, setExpandedLine] = useState<string | null>(null);
+  const [journeyRoute, setJourneyRoute] = useState<JourneyRoute | null>(null);
+  useEffect(() => {
+    setJourneyRoute(loadJourneyRoute());
+  }, []);
   const { data: lineStatus } = useQuery({
     queryKey: ["status"],
     queryFn: fetchLineStatus,
@@ -210,9 +215,25 @@ function MapPage() {
               overgroundEnabled={overgroundEnabled}
               selectedStation={selectedStation}
               hiddenLines={hiddenLines}
+              journeyRoute={journeyRoute}
             />
           </Suspense>
         </ClientOnly>
+        {journeyRoute && (
+          <div className="absolute left-3 top-14 z-20">
+            <button
+              type="button"
+              onClick={() => {
+                clearJourneyRoute();
+                setJourneyRoute(null);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/80 bg-white/95 px-3 py-1.5 text-xs font-medium text-neutral-900 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100"
+            >
+              <X size={13} aria-hidden="true" />
+              Clear journey
+            </button>
+          </div>
+        )}
         {showLines && (
           <section
             id="map-lines-panel"

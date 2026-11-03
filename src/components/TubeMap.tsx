@@ -27,6 +27,7 @@ import {
   type TrackSegment,
 } from "@/lib/tube-train-map";
 import { buildTrainTooltipHtml, escapeHtml } from "@/lib/train-tooltip";
+import type { JourneyRoute } from "@/lib/journey-route";
 import {
   LINE_COLOURS,
   OVERGROUND_LINE_IDS,
@@ -68,10 +69,12 @@ export default function TubeMap({
   overgroundEnabled,
   selectedStation,
   hiddenLines = [],
+  journeyRoute = null,
 }: {
   overgroundEnabled: boolean;
   selectedStation: Station | null;
   hiddenLines?: string[];
+  journeyRoute?: JourneyRoute | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -98,6 +101,83 @@ export default function TubeMap({
       duration: 1200,
     });
   }, [isMapReady, selectedStation]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!isMapReady || !map) return;
+    const sourceId = "journey-route";
+    const layerIds = [
+      "journey-route-casing",
+      "journey-route-line",
+      "journey-route-walk",
+      "journey-route-stops",
+    ];
+    for (const id of layerIds) if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+    if (!journeyRoute || journeyRoute.segments.length === 0) return;
+
+    map.addSource(sourceId, {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: [
+          ...journeyRoute.segments.map((segment) => ({
+            type: "Feature" as const,
+            properties: { colour: segment.colour, walking: segment.walking },
+            geometry: { type: "LineString" as const, coordinates: segment.coordinates },
+          })),
+          ...journeyRoute.stops.map((stop) => ({
+            type: "Feature" as const,
+            properties: { stop: true },
+            geometry: { type: "Point" as const, coordinates: stop.coordinates },
+          })),
+        ],
+      },
+    });
+    const lineLayout = { "line-cap": "round" as const, "line-join": "round" as const };
+    map.addLayer({
+      id: "journey-route-casing",
+      type: "line",
+      source: sourceId,
+      filter: ["all", ["==", ["geometry-type"], "LineString"], ["!=", ["get", "walking"], true]],
+      layout: lineLayout,
+      paint: { "line-color": "#ffffff", "line-width": 11, "line-opacity": 0.95 },
+    });
+    map.addLayer({
+      id: "journey-route-line",
+      type: "line",
+      source: sourceId,
+      filter: ["all", ["==", ["geometry-type"], "LineString"], ["!=", ["get", "walking"], true]],
+      layout: lineLayout,
+      paint: { "line-color": ["get", "colour"], "line-width": 6 },
+    });
+    map.addLayer({
+      id: "journey-route-walk",
+      type: "line",
+      source: sourceId,
+      filter: ["all", ["==", ["geometry-type"], "LineString"], ["==", ["get", "walking"], true]],
+      layout: { "line-join": "round" },
+      paint: { "line-color": "#1d4ed8", "line-width": 4, "line-dasharray": [1, 1.6] },
+    });
+    map.addLayer({
+      id: "journey-route-stops",
+      type: "circle",
+      source: sourceId,
+      filter: ["==", ["geometry-type"], "Point"],
+      paint: {
+        "circle-radius": 6,
+        "circle-color": "#ffffff",
+        "circle-stroke-color": "#111827",
+        "circle-stroke-width": 3,
+      },
+    });
+
+    const bounds = new maplibregl.LngLatBounds();
+    for (const segment of journeyRoute.segments) {
+      for (const coordinate of segment.coordinates) bounds.extend(coordinate);
+    }
+    map.fitBounds(bounds, { padding: 80, duration: 1200, maxZoom: 15, pitch: 30 });
+  }, [isMapReady, journeyRoute]);
 
   useEffect(() => {
     const themeObserver = new MutationObserver(() => {

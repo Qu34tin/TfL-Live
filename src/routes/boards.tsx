@@ -10,6 +10,7 @@ import {
   Info,
   LoaderCircle,
   LocateFixed,
+  Map as MapIcon,
   Route as RouteIcon,
   Share2,
   Star,
@@ -17,6 +18,7 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildJourneyRoute, saveJourneyRoute } from "@/lib/journey-route";
 import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
 import { Segmented } from "@/components/Segmented";
 import { WhenPicker } from "@/components/WhenPicker";
@@ -901,6 +903,7 @@ function JourneyOption({
       })
     : null;
   const fare = formatFare(journey.fare?.totalCost);
+  const navigate = useNavigate();
 
   return (
     <article className="rounded-xl border border-border bg-background p-4">
@@ -953,7 +956,17 @@ function JourneyOption({
         })}
       </ol>
       <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
-        <a
+        <button
+          type="button"
+          onClick={() => {
+            saveJourneyRoute(buildJourneyRoute(journey));
+            void navigate({ to: "/map" });
+          }}
+          className="inline-flex items-center gap-2 rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+        >
+          <MapIcon size={15} aria-hidden="true" />
+          Show on map
+        </button>        <a
           href={`https://maps.apple.com/?saddr=${encodeURIComponent(from)}&daddr=${encodeURIComponent(to)}&dirflg=r`}
           target="_blank"
           rel="noopener noreferrer"
