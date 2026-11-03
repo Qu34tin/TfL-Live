@@ -16,7 +16,7 @@ import {
   TriangleAlert,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
 import { Segmented } from "@/components/Segmented";
 import { WhenPicker } from "@/components/WhenPicker";
@@ -1017,13 +1017,18 @@ function JourneyStationPicker({
     setOpen(false);
   };
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
   return (
-    <div
-      className={`relative ${open && results.length > 0 ? "z-20" : ""}`}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      }}
-    >
+    <div ref={containerRef} className={`relative ${open && results.length > 0 ? "z-20" : ""}`}>
       <label htmlFor={id} className="flex items-center justify-between text-sm font-medium">
         {label}
         <button
