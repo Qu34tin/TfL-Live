@@ -148,8 +148,19 @@ export async function fetchJourneys(
   from: string,
   to: string,
   options: JourneyOptions = {},
+  labels: { from?: string; to?: string } = {},
 ): Promise<Journey[]> {
   let response = await fetch(buildJourneyUrl(from, to, options));
+  // Some station IDs (e.g. certain 9400ZZ rail stops) are unknown to the planner; retry by name.
+  if (response.status === 404 && (labels.from || labels.to)) {
+    const retryFrom = labels.from || from;
+    const retryTo = labels.to || to;
+    if (retryFrom !== from || retryTo !== to) {
+      from = retryFrom;
+      to = retryTo;
+      response = await fetch(buildJourneyUrl(from, to, options));
+    }
+  }
   // Free-text places (postcodes, addresses) can come back as an ambiguous match.
   if (response.status === 300) {
     const ambiguous: JourneyResponse = await response.json();

@@ -134,7 +134,10 @@ function Boards() {
     queryKey: ["journeys", journeySearch],
     queryFn: () => {
       if (!journeySearch) throw new Error("Choose a start and destination.");
-      return fetchJourneys(journeySearch.from, journeySearch.to, journeySearch.options);
+      return fetchJourneys(journeySearch.from, journeySearch.to, journeySearch.options, {
+        from: journeySearch.fromLabel,
+        to: journeySearch.toLabel,
+      });
     },
     enabled: journeySearch !== null,
   });
