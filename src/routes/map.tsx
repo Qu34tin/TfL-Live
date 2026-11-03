@@ -51,6 +51,16 @@ function JourneyPanel({
   const first = route.stops[0]?.name;
   const last = route.stops[route.stops.length - 1]?.name;
   const changes = Math.max(0, route.steps.filter((step) => !step.walking).length - 1);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  const nextTrain = route.steps.find((step) => !step.walking && step.departureTime);
+  const departure = nextTrain?.departureTime ? new Date(nextTrain.departureTime) : null;
+  const minutesAway = departure
+    ? Math.max(0, Math.round((departure.getTime() - now) / 60_000))
+    : null;
   return (
     <section
       aria-label="Journey instructions"
@@ -68,6 +78,15 @@ function JourneyPanel({
             {" · "}
             {changes === 0 ? "No changes" : `${changes} change${changes > 1 ? "s" : ""}`}
           </p>
+          {departure && nextTrain && (
+            <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+              Next {nextTrain.label} departs{" "}
+              <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+                {departure.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              {minutesAway !== null && (minutesAway === 0 ? " · now" : ` · in ${minutesAway} min`)}
+            </p>
+          )}
         </div>
         <button
           type="button"

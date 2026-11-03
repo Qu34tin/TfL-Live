@@ -907,6 +907,13 @@ function JourneyOption({
     : null;
   const fare = formatFare(journey.fare?.totalCost);
   const navigate = useNavigate();
+  const firstTransit = journey.legs?.find(
+    (leg) => leg.mode?.id !== "walking" && leg.departureTime,
+  );
+  const nextDeparture = firstTransit?.departureTime ? new Date(firstTransit.departureTime) : null;
+  const minutesAway = nextDeparture
+    ? Math.max(0, Math.round((nextDeparture.getTime() - Date.now()) / 60_000))
+    : null;
 
   return (
     <article className="rounded-xl border border-border bg-background p-4">
@@ -924,6 +931,15 @@ function JourneyOption({
           )}
         </p>
       </div>
+      {nextDeparture && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Next {firstTransit?.mode?.name ?? "train"} departs{" "}
+          <span className="font-mono font-medium text-foreground">
+            {nextDeparture.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+          </span>
+          {minutesAway !== null && (minutesAway === 0 ? " · now" : ` · in ${minutesAway} min`)}
+        </p>
+      )}
       <ol className="mt-3 space-y-3 border-l border-border pl-4">
         {journey.legs?.map((leg, index) => {
           const modeName = leg.mode?.name ?? "Travel";

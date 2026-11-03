@@ -26,6 +26,7 @@ export type JourneyRouteStep = {
   walking: boolean;
   label: string;
   bounds?: Bounds;
+  departureTime?: string;
 };
 
 export type JourneyRoute = {
@@ -115,7 +116,10 @@ export function buildJourneyRoute(journey: Journey): JourneyRoute {
         [b.lon, b.lat],
       ];
     }
-    const colour = (lineId && (LINE_COLOURS[lineId] ?? MODE_COLOURS[lineId])) || "#2563eb";
+    const colour =
+      modeId === "bus"
+        ? MODE_COLOURS["bus"]!
+        : (lineId && (LINE_COLOURS[lineId] ?? MODE_COLOURS[lineId])) || "#2563eb";
     const modeName = leg.mode?.name ?? "Travel";
     const lineName = leg.line?.name ?? leg.routeOptions?.[0]?.name;
     const label = walking ? "Walk" : (lineName ?? modeName);
@@ -135,6 +139,7 @@ export function buildJourneyRoute(journey: Journey): JourneyRoute {
       colour,
       walking,
       label,
+      ...(leg.departureTime ? { departureTime: leg.departureTime } : {}),
       ...(boundsOf(coordinates) ? { bounds: boundsOf(coordinates) as Bounds } : {}),
     });
     addStop(a, index === 0 ? "start" : "interchange", index === 0 ? undefined : index);

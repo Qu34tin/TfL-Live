@@ -78,6 +78,7 @@ export const JOURNEY_MODES = [
   { id: "overground", label: "Overground" },
   { id: "dlr", label: "DLR" },
   { id: "tram", label: "Tram" },
+  { id: "bus", label: "Bus" },
   { id: "national-rail", label: "National Rail" },
   { id: "cable-car", label: "Cable car" },
 ] as const;
@@ -102,14 +103,21 @@ const DEFAULT_JOURNEY_MODES = [
   "overground",
   "elizabeth-line",
   "tram",
+  "bus",
   "cable-car",
   "national-rail",
 ];
 
-export function buildJourneyUrl(from: string, to: string, options: JourneyOptions = {}) {
-  const query = new URLSearchParams({
-    mode: (options.modes?.length ? options.modes : DEFAULT_JOURNEY_MODES).join(","),
-  });
+export function buildJourneyUrl(
+  from: string,
+  to: string,
+  options: JourneyOptions = {},
+  anyMode = false,
+) {
+  const query = new URLSearchParams();
+  if (!anyMode) {
+    query.set("mode", (options.modes?.length ? options.modes : DEFAULT_JOURNEY_MODES).join(","));
+  }
   const when = options.when?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (when) {
     query.set("date", `${when[1]}${when[2]}${when[3]}`);
@@ -118,9 +126,10 @@ export function buildJourneyUrl(from: string, to: string, options: JourneyOption
   }
   if (options.preference) query.set("journeyPreference", options.preference);
   if (options.accessibility) query.set("accessibilityPreference", options.accessibility);
-  return `${API}/Journey/JourneyResults/${encodeURIComponent(from)}/to/${encodeURIComponent(to)}?${query}`;
+  // TfL rejects an encoded comma in "lat,lon" coordinates with a 404.
+  const place = (value: string) => encodeURIComponent(value).replace(/%2C/gi, ",");
+  return `${API}/Journey/JourneyResults/${place(from)}/to/${place(to)}?${query}`;
 }
-
 type DisambiguationOption = { parameterValue?: string; matchQuality?: number };
 type JourneyResponse = {
   journeys?: Journey[];
@@ -144,35 +153,43 @@ export function formatFare(pence?: number) {
   return typeof pence === "number" ? `£${(pence / 100).toFixed(2)}` : null;
 }
 
+async function fetchWithRateLimitRetry(url: string) {
+  let response = await fetch(url);
+  for (const delay of [1500, 3500]) {
+    if (response.status !== 429) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    response = await fetch(url);
+  }
+  return response;
+}
+
 export async function fetchJourneys(
   from: string,
   to: string,
   options: JourneyOptions = {},
   labels: { from?: string; to?: string } = {},
 ): Promise<Journey[]> {
-  let response = await fetch(buildJourneyUrl(from, to, options));
-  // Some station IDs (e.g. certain 9400ZZ rail stops) are unknown to the planner; retry by name.
-  if (response.status === 404 && (labels.from || labels.to)) {
-    const retryFrom = labels.from || from;
-    const retryTo = labels.to || to;
-    if (retryFrom !== from || retryTo !== to) {
-      from = retryFrom;
-      to = retryTo;
-      response = await fetch(buildJourneyUrl(from, to, options));
-    }
-  }
+  let response = await fetchWithRateLimitRetry(buildJourneyUrl(from, to, options));
   // Free-text places (postcodes, addresses) can come back as an ambiguous match.
   if (response.status === 300) {
     const ambiguous: JourneyResponse = await response.json();
-    const resolvedFrom = bestMatch(ambiguous.fromLocationDisambiguation?.disambiguationOptions);
-    const resolvedTo = bestMatch(ambiguous.toLocationDisambiguation?.disambiguationOptions);
-    response = await fetch(buildJourneyUrl(resolvedFrom ?? from, resolvedTo ?? to, options));
+    from = bestMatch(ambiguous.fromLocationDisambiguation?.disambiguationOptions) ?? from;
+    to = bestMatch(ambiguous.toLocationDisambiguation?.disambiguationOptions) ?? to;
+    response = await fetchWithRateLimitRetry(buildJourneyUrl(from, to, options));
+  }
+  // A mode filter can hide the only route (e.g. a stop served by other modes); retry unfiltered
+  // and, for IDs the planner rejects, by place name.
+  if (response.status === 404 && !options.modes?.length) {
+    response = await fetchWithRateLimitRetry(buildJourneyUrl(from, to, options, true));
+  }
+  if (response.status === 404 && (labels.from || labels.to)) {
+    const named = buildJourneyUrl(labels.from || from, labels.to || to, options, true);
+    response = await fetchWithRateLimitRetry(named);
   }
   if (!response.ok) throw new Error(`Journey planner unavailable (${response.status})`);
   const result: JourneyResponse = await response.json();
   return filterJourneysByAvoidedLines(result.journeys ?? [], options.avoidLines);
 }
-
 export type StationCrowding = { percentageOfBaseline: number; timeUtc?: string | undefined };
 
 export async function fetchStationCrowding(naptanId: string): Promise<StationCrowding | null> {
