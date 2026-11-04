@@ -451,18 +451,25 @@ export default function TubeMap({
 
     maplibregl.setWorkerUrl(maplibreWorkerUrl);
     const camera = cameraRef.current;
-    const map = new maplibregl.Map({
-      container: ref.current,
-      style: createMapTilerStyle(apiKey, isDark),
-      center: camera?.center ?? [-0.118092, 51.509865],
-      zoom: camera?.zoom ?? 11,
-      pitch: camera?.pitch ?? 50,
-      bearing: camera?.bearing ?? 0,
-      maxPitch: 75,
-      minZoom: 9,
-      maxZoom: 17,
-      attributionControl: { compact: true },
-    });
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: ref.current,
+        style: createMapTilerStyle(apiKey, isDark),
+        center: camera?.center ?? [-0.118092, 51.509865],
+        zoom: camera?.zoom ?? 11,
+        pitch: camera?.pitch ?? 50,
+        bearing: camera?.bearing ?? 0,
+        maxPitch: 75,
+        minZoom: 9,
+        maxZoom: 17,
+        attributionControl: { compact: true },
+      });
+    } catch (mapError) {
+      console.error("Unable to create map", mapError);
+      setError("The map couldn't start on this device. Check that WebGL is enabled.");
+      return;
+    }
     mapRef.current = map;
 
     let trainActions: TrainActions | undefined;
