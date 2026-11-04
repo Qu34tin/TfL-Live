@@ -64,7 +64,7 @@ function JourneyPanel({
   return (
     <section
       aria-label="Journey instructions"
-      className="absolute inset-x-3 bottom-3 z-20 flex max-h-[50%] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100 sm:inset-x-auto sm:left-3 sm:w-[22rem]"
+      className="absolute bottom-10 left-3 right-16 z-20 flex max-h-[50%] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-[#192126] dark:text-neutral-100 sm:bottom-3 sm:right-auto sm:w-[22rem]"
     >
       <div className="flex items-start gap-2 px-3.5 pb-2 pt-3">
         <div className="min-w-0 flex-1">
@@ -228,9 +228,9 @@ function MapPage() {
         className="relative mx-3 mb-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/20 bg-[#f2f1eb] dark:border-neutral-700 dark:bg-[#111820] sm:mx-6"
       >
         {
-          <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
+          <div className="absolute left-24 right-3 top-3 z-20 sm:left-1/2 sm:right-auto sm:top-4 sm:-translate-x-1/2">
             <div className="relative">
-              <div className="flex w-[min(22rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
+              <div className="flex w-full items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 sm:w-[22rem]">
                 <Search size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
                 <label className="sr-only" htmlFor="map-station-search">
                   Search for a station
@@ -480,7 +480,7 @@ function MapPage() {
         )}
         {
           <>
-            <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-white/80 bg-white/90 px-3 py-1.5 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95">
+            <div className="pointer-events-none absolute left-3 top-3 flex h-10 items-center rounded-md border border-white/80 bg-white/90 px-3 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 sm:block sm:h-auto sm:py-1.5">
               <p className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-red-600">
                 <span className="pulse-dot h-2 w-2 rounded-full bg-red-500" /> Live
               </p>
