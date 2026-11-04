@@ -35,6 +35,7 @@ import {
   fetchStationAccessibility,
   fetchStationCrowding,
   formatFare,
+  searchBusStops,
   type Journey,
   JOURNEY_MODES,
   type JourneyPreference,
@@ -1032,19 +1033,48 @@ function JourneyStationPicker({
 }) {
   const [open, setOpen] = useState(false);
   const query = location.query.trim().toLowerCase();
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(location.query.trim()), 250);
+    return () => window.clearTimeout(timeout);
+  }, [location.query]);
+  const {
+    data: busStops = [],
+    isFetching: busStopsLoading,
+    error: busStopsError,
+  } = useQuery({
+    queryKey: ["bus-stop-suggestions", debouncedQuery.toLowerCase()],
+    queryFn: () => searchBusStops(debouncedQuery),
+    enabled: open && debouncedQuery.trim().length >= 2,
+    staleTime: 5 * 60_000,
+  });
   const results = useMemo(() => {
     if (!query) return [];
-    return stations
+    const stationOptions = stations
       .filter((station) => station.name.toLowerCase().includes(query))
-      .sort(
-        (a, b) =>
-          Number(!a.name.toLowerCase().startsWith(query)) -
-          Number(!b.name.toLowerCase().startsWith(query)),
-      )
-      .slice(0, 8);
-  }, [query, stations]);
+      .map((station) => ({
+        id: station.id,
+        name: station.name,
+        lines: station.lines,
+        isBusStop: false,
+      }));
+    const showBusStops = debouncedQuery.trim().toLowerCase() === query;
+    const busStopOptions = showBusStops
+      ? busStops
+          .filter((busStop) => !stationOptions.some((station) => station.id === busStop.id))
+          .map((station) => ({ ...station, lines: [], isBusStop: true }))
+      : [];
+    const byPrefix = (a: { name: string }, b: { name: string }) =>
+      Number(!a.name.toLowerCase().startsWith(query)) -
+      Number(!b.name.toLowerCase().startsWith(query));
+    stationOptions.sort(byPrefix);
+    busStopOptions.sort(byPrefix);
+    return busStopOptions.length
+      ? [...stationOptions.slice(0, 4), ...busStopOptions.slice(0, 4)].sort(byPrefix)
+      : stationOptions.slice(0, 8);
+  }, [busStops, debouncedQuery, query, stations]);
 
-  const pick = (station: Station) => {
+  const pick = (station: { id: string; name: string; lines: string[]; isBusStop?: boolean }) => {
     onChange({ query: station.name, stationId: station.id });
     setOpen(false);
   };
@@ -1081,11 +1111,11 @@ function JourneyStationPicker({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Station, postcode or address"
+        placeholder="Station, bus stop, postcode or address"
         autoComplete="off"
         className="mt-1.5 w-full rounded-full border border-border bg-background px-5 py-3 text-base outline-none placeholder:text-muted-foreground focus:border-primary"
       />
-      {open && results.length > 0 && (
+      {open && (results.length > 0 || busStopsLoading || busStopsError) && (
         <ul className="absolute left-0 top-full z-30 mt-2 w-full overflow-hidden rounded-xl border border-border bg-popover shadow-2xl">
           {results.map((station) => (
             <li key={station.id}>
@@ -1096,25 +1126,47 @@ function JourneyStationPicker({
                 className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left hover:bg-secondary"
               >
                 <span>{station.name}</span>
-                <span className="flex gap-1">
-                  {station.lines.map((line) => (
-                    <span
-                      key={line}
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ background: LINE_COLOURS[line] }}
-                    />
-                  ))}
-                </span>
+                {station.isBusStop ? (
+                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                    Bus stop
+                  </span>
+                ) : (
+                  <span className="flex gap-1">
+                    {station.lines.map((line) => (
+                      <span
+                        key={line}
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ background: LINE_COLOURS[line] }}
+                      />
+                    ))}
+                  </span>
+                )}
               </button>
             </li>
           ))}
+          {busStopsLoading && (
+            <li className="px-5 py-2.5 text-sm text-muted-foreground" role="status">
+              Searching bus stops…
+            </li>
+          )}
+          {busStopsError && (
+            <li className="px-5 py-2.5 text-sm text-destructive" role="alert">
+              Bus stop suggestions are unavailable. You can still search by name.
+            </li>
+          )}
         </ul>
       )}
-      {open && query && stations.length > 0 && results.length === 0 && (
-        <p className="absolute z-10 mt-2 rounded-lg bg-popover px-5 py-2 text-sm text-muted-foreground shadow">
-          No station matches "{location.query}". It will be searched as a place or postcode.
-        </p>
-      )}
+      {open &&
+        query &&
+        stations.length > 0 &&
+        results.length === 0 &&
+        !busStopsLoading &&
+        !busStopsError && (
+          <p className="absolute z-10 mt-2 rounded-lg bg-popover px-5 py-2 text-sm text-muted-foreground shadow">
+            No station or bus stop matches "{location.query}". It will be searched as a place or
+            postcode.
+          </p>
+        )}
     </div>
   );
 }

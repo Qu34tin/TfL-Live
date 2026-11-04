@@ -375,6 +375,33 @@ export type Station = {
   stopIds: string[];
 };
 
+export type BusStopSuggestion = {
+  id: string;
+  name: string;
+};
+
+export async function searchBusStops(query: string): Promise<BusStopSuggestion[]> {
+  const response = await fetch(
+    `${API}/StopPoint/Search/${encodeURIComponent(query)}?modes=bus&maxResults=8`,
+  );
+  if (!response.ok) {
+    throw new Error(`Bus stop search unavailable (${response.status})`);
+  }
+  const result: {
+    matches?: { id?: string; name?: string; towards?: string }[];
+  } = await response.json();
+  return (result.matches ?? []).flatMap((match) => {
+    if (!match.id || !match.name?.trim()) return [];
+    const towards = match.towards?.trim();
+    return [
+      {
+        id: match.id,
+        name: towards ? `${match.name.trim()} — towards ${towards}` : match.name.trim(),
+      },
+    ];
+  });
+}
+
 export type StationAccessibilityItem = { label: string; value: string };
 
 export async function fetchStationAccessibility(

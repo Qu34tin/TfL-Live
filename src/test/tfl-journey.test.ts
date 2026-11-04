@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJourneys } from "@/lib/tfl";
+import { fetchJourneys, searchBusStops } from "@/lib/tfl";
 
 describe("TfL journey planner", () => {
   afterEach(() => {
@@ -25,6 +25,34 @@ describe("TfL journey planner", () => {
 
     await expect(fetchJourneys("Waterloo", "Canary Wharf")).rejects.toThrow(
       "Journey planner unavailable (503)",
+    );
+  });
+
+  it("searches TfL for bus stop suggestions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        matches: [
+          { id: "490000173RC", name: "Oxford Circus Station", towards: "Marble Arch" },
+          { name: "Missing stop ID" },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(searchBusStops("Oxford Circus")).resolves.toEqual([
+      { id: "490000173RC", name: "Oxford Circus Station — towards Marble Arch" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.tfl.gov.uk/StopPoint/Search/Oxford%20Circus?modes=bus&maxResults=8",
+    );
+  });
+
+  it("surfaces bus stop search errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    await expect(searchBusStops("Oxford Circus")).rejects.toThrow(
+      "Bus stop search unavailable (503)",
     );
   });
 });
