@@ -6,7 +6,7 @@ import { STORAGE_KEYS } from "@/lib/storage";
 export const Route = createFileRoute("/privacy")({
   head: () => ({
     meta: [
-      { title: "Privacy, data & terms — London Underground Live" },
+      { title: "Privacy · TfL-Live" },
       {
         name: "description",
         content:

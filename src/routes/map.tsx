@@ -19,7 +19,7 @@ const TubeMap = lazy(() => import("@/components/TubeMap"));
 export const Route = createFileRoute("/map")({
   head: () => ({
     meta: [
-      { title: "Live 3D Tube Map — London Underground Live" },
+      { title: "Map · TfL-Live" },
       {
         name: "description",
         content: "Watch London Tube and Overground trains move across a live 3D map.",

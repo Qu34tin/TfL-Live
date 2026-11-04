@@ -71,7 +71,7 @@ export const Route = createFileRoute("/boards")({
   validateSearch: validateJourneyParams,
   head: () => ({
     meta: [
-      { title: "Live Departure Boards — London Underground Live" },
+      { title: "Boards · TfL-Live" },
       {
         name: "description",
         content: "Plan London journeys and search stations for live departures.",

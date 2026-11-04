@@ -14,7 +14,7 @@ import { STORAGE_KEYS, toggleInList, useStoredState } from "@/lib/storage";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "London Underground Live — Tube & Elizabeth line status" },
+      { title: "Status · TfL-Live" },
       {
         name: "description",
         content: "Live status for every Tube and Elizabeth line, refreshed every 30 seconds.",
