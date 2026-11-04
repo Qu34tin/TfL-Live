@@ -381,25 +381,23 @@ export type BusStopSuggestion = {
 };
 
 export async function searchBusStops(query: string): Promise<BusStopSuggestion[]> {
-  const response = await fetch(
+  const response = await fetchWithRateLimitRetry(
     `${API}/StopPoint/Search/${encodeURIComponent(query)}?modes=bus&maxResults=8`,
   );
   if (!response.ok) {
     throw new Error(`Bus stop search unavailable (${response.status})`);
   }
   const result: {
-    matches?: { id?: string; name?: string; towards?: string }[];
+    matches?: { id?: string; icsId?: string; name?: string }[];
   } = await response.json();
-  return (result.matches ?? []).flatMap((match) => {
-    if (!match.id || !match.name?.trim()) return [];
-    const towards = match.towards?.trim();
-    return [
-      {
-        id: match.id,
-        name: towards ? `${match.name.trim()} — towards ${towards}` : match.name.trim(),
-      },
-    ];
-  });
+  // Each physical stop has several direction-specific points sharing one icsId.
+  const stops = new Map<string, BusStopSuggestion>();
+  for (const match of result.matches ?? []) {
+    const id = match.icsId || match.id;
+    const name = match.name?.trim();
+    if (id && name && !stops.has(id)) stops.set(id, { id, name });
+  }
+  return [...stops.values()];
 }
 
 export type StationAccessibilityItem = { label: string; value: string };
@@ -452,7 +450,7 @@ export function cleanName(n: string) {
 export async function fetchAllStations(): Promise<Station[]> {
   const all = await Promise.all(
     BOARD_LINES.map(async (line) => {
-      const r = await fetch(`${API}/Line/${line}/StopPoints`);
+      const r = await fetchWithRateLimitRetry(`${API}/Line/${line}/StopPoints`);
       if (!r.ok)
         return [] as {
           naptanId: string;
@@ -497,7 +495,10 @@ export async function fetchAllStations(): Promise<Station[]> {
       byName.set(s.name, { ...s, lines: [...s.lines], stopIds: [...s.stopIds] });
     }
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const stations = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  // An empty list means every request failed; throwing lets the query retry instead of caching it.
+  if (stations.length === 0) throw new Error("Station list unavailable");
+  return stations;
 }
 
 export async function fetchLineGeometry(line: string): Promise<number[][][]> {

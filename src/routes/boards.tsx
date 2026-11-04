@@ -1047,6 +1047,7 @@ function JourneyStationPicker({
     queryFn: () => searchBusStops(debouncedQuery),
     enabled: open && debouncedQuery.trim().length >= 2,
     staleTime: 5 * 60_000,
+    retry: false,
   });
   const results = useMemo(() => {
     if (!query) return [];
@@ -1144,7 +1145,7 @@ function JourneyStationPicker({
               </button>
             </li>
           ))}
-          {busStopsLoading && (
+          {busStopsLoading && busStops.length === 0 && (
             <li className="px-5 py-2.5 text-sm text-muted-foreground" role="status">
               Searching bus stops…
             </li>

@@ -33,7 +33,8 @@ describe("TfL journey planner", () => {
       ok: true,
       json: async () => ({
         matches: [
-          { id: "490000173RC", name: "Oxford Circus Station", towards: "Marble Arch" },
+          { id: "490000173RC", icsId: "1002520", name: "Oxford Circus Station" },
+          { id: "490000173RG", icsId: "1002520", name: "Oxford Circus Station" },
           { name: "Missing stop ID" },
         ],
       }),
@@ -41,7 +42,7 @@ describe("TfL journey planner", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(searchBusStops("Oxford Circus")).resolves.toEqual([
-      { id: "490000173RC", name: "Oxford Circus Station — towards Marble Arch" },
+      { id: "1002520", name: "Oxford Circus Station" },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.tfl.gov.uk/StopPoint/Search/Oxford%20Circus?modes=bus&maxResults=8",
