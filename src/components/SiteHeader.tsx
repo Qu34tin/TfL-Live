@@ -92,5 +92,12 @@ export function SiteFooter() {
 }
 
 export function SiteVersion() {
-  return <span>Version {import.meta.env["VITE_APP_VERSION"]}</span>;
+  const cloudflareVersion = import.meta.env["VITE_CLOUDFLARE_VERSION"];
+
+  return (
+    <span>
+      Version {import.meta.env["VITE_APP_VERSION"]}
+      {cloudflareVersion && ` · Cloudflare #${cloudflareVersion}`}
+    </span>
+  );
 }
