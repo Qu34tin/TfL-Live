@@ -2,7 +2,7 @@ import { createFileRoute, ClientOnly, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronUp, ListFilter, Search, TrainFront, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { SiteHeader } from "@/components/SiteHeader";
+import { SiteHeader, SiteVersion } from "@/components/SiteHeader";
 import { clearJourneyRoute, loadJourneyRoute, type JourneyRoute } from "@/lib/journey-route";
 import {
   disruptionsFromStatus,
@@ -549,6 +549,8 @@ function MapPage() {
         <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
           Privacy &amp; terms
         </Link>
+        <span className="mx-2 text-muted-foreground/60">·</span>
+        <SiteVersion />
       </footer>
     </div>
   );

@@ -6,6 +6,11 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+const appVersion =
+  process.env["CF_PAGES_COMMIT_SHA"]?.slice(0, 7) ??
+  process.env["GITHUB_SHA"]?.slice(0, 7) ??
+  "development";
+
 export default defineConfig({
   nitro: {
     preset:
@@ -14,6 +19,9 @@ export default defineConfig({
         : "cloudflare-module",
   },
   vite: {
+    define: {
+      "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
+    },
     worker: { format: "es" },
     optimizeDeps: {
       exclude: ["maplibre-gl", "maplibre-gl-worker.mjs"],

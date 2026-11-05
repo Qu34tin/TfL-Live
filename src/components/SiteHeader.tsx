@@ -85,7 +85,12 @@ export function SiteFooter() {
         <Link to="/privacy" className="underline underline-offset-2 hover:text-foreground">
           Privacy, data &amp; terms
         </Link>
+        <SiteVersion />
       </div>
     </footer>
   );
+}
+
+export function SiteVersion() {
+  return <span>Version {import.meta.env["VITE_APP_VERSION"]}</span>;
 }
