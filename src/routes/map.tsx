@@ -1,15 +1,27 @@
 import { createFileRoute, ClientOnly, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronUp, ListFilter, Search, TrainFront, X } from "lucide-react";
+import {
+  BusFront,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Heart,
+  ListFilter,
+  Search,
+  TrainFront,
+  X,
+} from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { SiteHeader, SiteVersion } from "@/components/SiteHeader";
 import { clearJourneyRoute, loadJourneyRoute, type JourneyRoute } from "@/lib/journey-route";
+import { STORAGE_KEYS, toggleInList, useStoredState } from "@/lib/storage";
 import {
   disruptionsFromStatus,
-  fetchAllStations,
   fetchLineStatus,
   LINE_COLOURS,
   OVERGROUND_LINE_IDS,
+  searchBusStops,
+  type BusStopSuggestion,
   type Station,
   TUBE_LINES,
 } from "@/lib/tfl";
@@ -22,12 +34,12 @@ export const Route = createFileRoute("/map")({
       { title: "Map · TfL-Live" },
       {
         name: "description",
-        content: "Watch London Tube and Overground trains move across a live 3D map.",
+        content: "Watch London buses, Tube and Overground trains move across a live 3D map.",
       },
       { property: "og:title", content: "Live 3D Tube Map" },
       {
         property: "og:description",
-        content: "Live Tube and Overground trains on a 3D map of London.",
+        content: "Live buses, Tube and Overground trains on a 3D map of London.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -157,8 +169,14 @@ function JourneyPanel({
 
 function MapPage() {
   const [overgroundEnabled, setOvergroundEnabled] = useState(false);
+  const [busEnabled, setBusEnabled] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+  const [selectedBusStop, setSelectedBusStop] = useState<BusStopSuggestion | null>(null);
+  const [favouriteBusStops, setFavouriteBusStops] = useStoredState<BusStopSuggestion[]>(
+    STORAGE_KEYS.favouriteBusStops,
+    [],
+  );
   const [stations, setStations] = useState<Station[]>([]);
   const [stationsLoading, setStationsLoading] = useState(true);
   const [stationSearchError, setStationSearchError] = useState<string | null>(null);
@@ -176,6 +194,13 @@ function MapPage() {
     queryFn: fetchLineStatus,
     refetchInterval: 30_000,
   });
+  const busStopSearch = useQuery({
+    queryKey: ["map-bus-stops", searchQuery.trim().toLowerCase()],
+    queryFn: () => searchBusStops(searchQuery.trim()),
+    enabled: busEnabled && showSuggestions && searchQuery.trim().length >= 2,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
   const disruptions = useMemo(() => disruptionsFromStatus(lineStatus ?? []), [lineStatus]);
   const mapLines = useMemo(
     () => [
@@ -188,43 +213,38 @@ function MapPage() {
     [overgroundEnabled],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchAllStations()
-      .then((loadedStations) => {
-        if (!cancelled) setStations(loadedStations);
-      })
-      .catch((error: unknown) => {
-        console.error("Unable to load stations for map search", error);
-        if (!cancelled)
-          setStationSearchError("Station search is unavailable. Please try again later.");
-      })
-      .finally(() => {
-        if (!cancelled) setStationsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const suggestions = useMemo(() => {
+    if (busEnabled) return [];
     if (!searchQuery.trim()) return [];
     const query = searchQuery.toLowerCase().trim();
     return stations.filter((station) => station.name.toLowerCase().includes(query)).slice(0, 8);
-  }, [searchQuery, stations]);
+  }, [busEnabled, searchQuery, stations]);
 
   const selectStation = (station: Station) => {
     setSearchQuery(station.name);
     setSelectedStation(station);
+    setSelectedBusStop(null);
     setShowSuggestions(false);
   };
+  const selectBusStop = (stop: BusStopSuggestion) => {
+    setSearchQuery(stop.name);
+    setSelectedStation(null);
+    setSelectedBusStop(stop);
+    setShowSuggestions(false);
+  };
+  const busStopSuggestions = busStopSearch.data ?? [];
+  const visibleBusStopSuggestions = busStopSuggestions.filter((stop) =>
+    stop.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+  );
+  const toggleBusStopFavourite = (stop: BusStopSuggestion) =>
+    setFavouriteBusStops((current) => toggleInList(current, stop, (a, b) => a.id === b.id));
 
   return (
     <div className="flex h-dvh flex-col bg-background">
       <SiteHeader />
       <main
         id="main-content"
-        aria-label="Live interactive London transport map. Open the Lines panel for a text alternative."
+        aria-label="Live interactive London transport map with optional bus stops. Open the Lines panel for a text alternative."
         className="relative mx-3 mb-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/20 bg-[#f2f1eb] dark:border-neutral-700 dark:bg-[#111820] sm:mx-6"
       >
         {
@@ -233,14 +253,17 @@ function MapPage() {
               <div className="flex w-full items-center gap-2 rounded-full border border-white/80 bg-white/95 px-3 shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 sm:w-[22rem]">
                 <Search size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
                 <label className="sr-only" htmlFor="map-station-search">
-                  Search for a station
+                  {busEnabled ? "Search for a bus stop" : "Search for a station"}
                 </label>
                 <input
                   id="map-station-search"
                   type="text"
                   role="combobox"
                   aria-autocomplete="list"
-                  aria-expanded={showSuggestions && Boolean(searchQuery.trim())}
+                  aria-expanded={
+                    showSuggestions &&
+                    (Boolean(searchQuery.trim()) || (busEnabled && favouriteBusStops.length > 0))
+                  }
                   aria-controls="map-station-suggestions"
                   autoComplete="off"
                   value={searchQuery}
@@ -249,26 +272,32 @@ function MapPage() {
                   onChange={(event) => {
                     setSearchQuery(event.target.value);
                     setSelectedStation(null);
+                    setSelectedBusStop(null);
                     setShowSuggestions(true);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") setShowSuggestions(false);
-                    if (event.key === "Enter" && suggestions[0]) {
+                    if (
+                      event.key === "Enter" &&
+                      (busEnabled ? visibleBusStopSuggestions[0] : suggestions[0])
+                    ) {
                       event.preventDefault();
-                      selectStation(suggestions[0]);
+                      if (busEnabled) selectBusStop(visibleBusStopSuggestions[0]!);
+                      else selectStation(suggestions[0]!);
                     }
                   }}
-                  placeholder="Search stations"
+                  placeholder={busEnabled ? "Search bus stops" : "Search stations"}
                   className="h-10 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
                 />
                 {searchQuery && (
                   <button
                     type="button"
-                    aria-label="Clear station search"
+                    aria-label={busEnabled ? "Clear bus stop search" : "Clear station search"}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       setSearchQuery("");
                       setSelectedStation(null);
+                      setSelectedBusStop(null);
                       setShowSuggestions(false);
                     }}
                     className="rounded-full p-1 text-muted-foreground hover:bg-secondary"
@@ -283,41 +312,125 @@ function MapPage() {
                   role="listbox"
                   className="absolute z-10 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border border-border bg-popover py-1 shadow-2xl"
                 >
-                  {suggestions.map((station) => (
-                    <li
-                      key={station.id}
-                      role="option"
-                      aria-selected={selectedStation?.id === station.id}
-                    >
-                      <button
-                        type="button"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => selectStation(station)}
-                        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
+                  {!busEnabled &&
+                    suggestions.map((station) => (
+                      <li
+                        key={station.id}
+                        role="option"
+                        aria-selected={selectedStation?.id === station.id}
                       >
-                        <span>{station.name}</span>
-                        <span className="flex shrink-0 gap-1" aria-label={station.lines.join(", ")}>
-                          {station.lines.slice(0, 4).map((line) => (
-                            <span
-                              key={line}
-                              aria-hidden="true"
-                              className="h-2.5 w-2.5 rounded-full"
-                              style={{ backgroundColor: LINE_COLOURS[line] ?? "#888" }}
-                            />
-                          ))}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                  {suggestions.length === 0 && (
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectStation(station)}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
+                        >
+                          <span>{station.name}</span>
+                          <span
+                            className="flex shrink-0 gap-1"
+                            aria-label={station.lines.join(", ")}
+                          >
+                            {station.lines.slice(0, 4).map((line) => (
+                              <span
+                                key={line}
+                                aria-hidden="true"
+                                className="h-2.5 w-2.5 rounded-full"
+                                style={{ backgroundColor: LINE_COLOURS[line] ?? "#888" }}
+                              />
+                            ))}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  {busEnabled &&
+                    visibleBusStopSuggestions.map((stop) => (
+                      <li
+                        key={stop.id}
+                        role="option"
+                        aria-selected={selectedBusStop?.id === stop.id}
+                        className="flex items-center"
+                      >
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectBusStop(stop)}
+                          className="min-w-0 flex-1 truncate px-4 py-2.5 text-left text-sm hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
+                        >
+                          {stop.name}
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${favouriteBusStops.some((saved) => saved.id === stop.id) ? "Remove" : "Save"} ${stop.name} ${favouriteBusStops.some((saved) => saved.id === stop.id) ? "from" : "to"} favourites`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => toggleBusStopFavourite(stop)}
+                          className="mr-2 rounded-full p-2 text-muted-foreground hover:bg-secondary hover:text-rose-500"
+                        >
+                          <Heart
+                            size={15}
+                            aria-hidden="true"
+                            fill={
+                              favouriteBusStops.some((saved) => saved.id === stop.id)
+                                ? "currentColor"
+                                : "none"
+                            }
+                          />
+                        </button>
+                      </li>
+                    ))}
+                  {(busEnabled
+                    ? visibleBusStopSuggestions.length === 0
+                    : suggestions.length === 0) && (
                     <li className="px-4 py-3 text-sm text-muted-foreground">
-                      {stationsLoading
-                        ? "Loading stations..."
-                        : (stationSearchError ?? "No stations found.")}
+                      {busEnabled
+                        ? busStopSearch.isFetching
+                          ? "Searching bus stops..."
+                          : busStopSearch.error
+                            ? "Bus stop search is unavailable. Please try again."
+                            : "No bus stops found."
+                        : stationsLoading
+                          ? "Loading stations..."
+                          : (stationSearchError ?? "No stations found.")}
                     </li>
                   )}
                 </ul>
               )}
+              {busEnabled &&
+                showSuggestions &&
+                !searchQuery.trim() &&
+                favouriteBusStops.length > 0 && (
+                  <ul
+                    id="map-station-suggestions"
+                    role="listbox"
+                    className="absolute z-10 mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-border bg-popover py-1 shadow-2xl"
+                  >
+                    {favouriteBusStops.map((stop) => (
+                      <li
+                        key={stop.id}
+                        role="option"
+                        aria-selected={selectedBusStop?.id === stop.id}
+                        className="flex items-center"
+                      >
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectBusStop(stop)}
+                          className="min-w-0 flex-1 truncate px-4 py-2.5 text-left text-sm hover:bg-secondary"
+                        >
+                          {stop.name}
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${stop.name} from favourites`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => toggleBusStopFavourite(stop)}
+                          className="mr-2 rounded-full p-2 text-rose-500 hover:bg-secondary"
+                        >
+                          <Heart size={15} fill="currentColor" aria-hidden="true" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
             </div>
           </div>
         }
@@ -333,7 +446,21 @@ function MapPage() {
           >
             <TubeMap
               overgroundEnabled={overgroundEnabled}
+              busEnabled={busEnabled}
               selectedStation={selectedStation}
+              selectedBusStop={selectedBusStop}
+              favouriteBusStops={favouriteBusStops}
+              onToggleBusStopFavourite={toggleBusStopFavourite}
+              onStationsLoaded={(loadedStations) => {
+                setStations(loadedStations);
+                setStationsLoading(false);
+                setStationSearchError(null);
+              }}
+              onStationsError={(error) => {
+                console.error("Unable to load stations for map search", error);
+                setStationsLoading(false);
+                setStationSearchError("Station search is unavailable. Please try again later.");
+              }}
               hiddenLines={hiddenLines}
               journeyRoute={journeyRoute}
               activeStep={activeStep}
@@ -489,12 +616,41 @@ function MapPage() {
               <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/80 bg-white/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-neutral-700 shadow-sm backdrop-blur dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-200">
                 <p>Right-drag to orbit</p>
                 <p>Zoom in for buildings</p>
-                <p>Click a station for accessibility info</p>
+                <p>
+                  {busEnabled
+                    ? "Click a station or bus stop for details"
+                    : "Click a station for accessibility info"}
+                </p>
+                {busEnabled && <p>Bus markers are TfL stop-arrival estimates, not GPS.</p>}
               </div>
             )}
           </>
         }
         <div className="absolute bottom-12 right-3 z-20 flex flex-col items-center gap-2">
+          {
+            <button
+              type="button"
+              onClick={() => {
+                setBusEnabled((current) => !current);
+                setSelectedBusStop(null);
+                setSelectedStation(null);
+                setSearchQuery("");
+                setShowSuggestions(false);
+              }}
+              aria-pressed={busEnabled}
+              aria-label={busEnabled ? "Hide bus stops" : "Show bus stops"}
+              className={`group relative inline-flex h-11 w-11 items-center justify-center rounded-lg border shadow-lg backdrop-blur transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#e32017] ${
+                busEnabled
+                  ? "border-[#e32017] bg-[#e32017] text-white"
+                  : "border-white/80 bg-white/95 text-neutral-900 hover:bg-red-50 dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100 dark:hover:bg-neutral-800"
+              }`}
+            >
+              <BusFront size={18} aria-hidden="true" />
+              <span className="pointer-events-none absolute right-full mr-2 hidden whitespace-nowrap rounded-lg border border-white/80 bg-white/95 px-2 py-1 text-xs font-medium text-neutral-900 shadow-lg backdrop-blur group-hover:block dark:border-neutral-700 dark:bg-[#192126]/95 dark:text-neutral-100">
+                {busEnabled ? "Hide bus stops" : "Show bus stops"}
+              </span>
+            </button>
+          }
           {
             <button
               type="button"
@@ -542,7 +698,11 @@ function MapPage() {
         </div>
       </main>
       <footer className="flex min-h-7 shrink-0 flex-wrap items-center justify-center px-4 py-1 text-center font-mono text-[10px] text-muted-foreground">
-        {overgroundEnabled ? "Live Tube + Overground Map" : "Live Tube Map"}{" "}
+        {busEnabled
+          ? `Live ${overgroundEnabled ? "Tube + Overground + " : "Tube + "}Bus Map`
+          : overgroundEnabled
+            ? "Live Tube + Overground Map"
+            : "Live Tube Map"}{" "}
         <span className="mx-2 text-muted-foreground/60">·</span> Map data © MapTiler and
         OpenStreetMap contributors <span className="mx-2 text-muted-foreground/60">·</span> Live
         transport data from TfL <span className="mx-2 text-muted-foreground/60">·</span>

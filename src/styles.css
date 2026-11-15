@@ -260,6 +260,117 @@
   color: #64748b;
   font-size: 10px;
 }
+.bus-stop-popup__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.bus-stop-popup__favourite {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(15 23 42 / 12%);
+  border-radius: 999px;
+  color: #e11d48;
+  font-size: 18px;
+  line-height: 1;
+}
+.bus-stop-popup__favourite:hover {
+  background: rgb(225 29 72 / 8%);
+}
+.bus-stop-popup__departures {
+  display: grid;
+  gap: 5px;
+  max-height: 185px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+.bus-stop-popup__route {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  background: rgb(248 250 252 / 85%);
+  padding: 7px;
+  text-align: left;
+}
+.bus-stop-popup__route:hover {
+  background: rgb(226 232 240 / 85%);
+}
+.bus-stop-popup__route strong {
+  flex: 0 0 auto;
+  color: #b91c1c;
+}
+.bus-stop-popup__route span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bus-stop-popup__route b {
+  flex: 0 0 auto;
+}
+.bus-stop-popup__filter {
+  margin: 0 0 7px;
+  border: 1px solid rgb(185 28 28 / 20%);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 650;
+}
+.bus-stop-popup__filter[aria-pressed="true"] {
+  background: #b91c1c;
+  color: #fff;
+}
+.bus-stop-popup__status,
+.bus-stop-popup__empty,
+.bus-stop-popup__loading,
+.bus-stop-popup__error {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 10px;
+}
+.bus-stop-popup__status,
+.bus-stop-popup__error {
+  color: #b91c1c;
+}
+.dark .bus-stop-popup__favourite {
+  border-color: rgb(255 255 255 / 15%);
+}
+.dark .bus-stop-popup__route {
+  background: rgb(30 41 59 / 85%);
+}
+.dark .bus-stop-popup__route:hover {
+  background: rgb(51 65 85 / 90%);
+}
+.dark .bus-stop-popup__route strong {
+  color: #fca5a5;
+}
+.dark .bus-stop-popup__filter {
+  border-color: rgb(252 165 165 / 30%);
+  color: #fca5a5;
+}
+.dark .bus-stop-popup__filter[aria-pressed="true"] {
+  background: #b91c1c;
+  color: #fff;
+}
+.dark .bus-stop-popup__status,
+.dark .bus-stop-popup__empty,
+.dark .bus-stop-popup__loading {
+  color: #94a3b8;
+}
+.dark .bus-stop-popup__status,
+.dark .bus-stop-popup__error {
+  color: #fca5a5;
+}
 .station-accessibility__list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

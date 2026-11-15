@@ -47,6 +47,11 @@ export type Arrival = {
   towards: string;
   destinationName?: string;
   timeToStation: number;
+  vehicleId?: string;
+  naptanId?: string;
+  stationName?: string;
+  currentLocation?: string;
+  expectedArrival?: string;
 };
 
 export type JourneyLeg = {
@@ -308,7 +313,9 @@ export async function fetchLineStatus(): Promise<LineStatus[]> {
 }
 
 export async function fetchArrivals(stopId: string): Promise<Arrival[]> {
-  const r = await fetch(`${API}/StopPoint/${stopId}/Arrivals`);
+  const r = await fetchWithRateLimitRetry(
+    `${API}/StopPoint/${encodeURIComponent(stopId)}/Arrivals`,
+  );
   if (!r.ok) throw new Error(`Arrivals feed unavailable (${r.status})`);
   const data: Arrival[] = await r.json();
   return data.sort((a, b) => a.timeToStation - b.timeToStation);
@@ -378,7 +385,30 @@ export type Station = {
 export type BusStopSuggestion = {
   id: string;
   name: string;
+  lat?: number;
+  lon?: number;
 };
+
+export type BusStop = {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  lines: string[];
+};
+
+export type BusVehicleArrival = Arrival & {
+  vehicleId: string;
+  stopId: string;
+  stopName: string;
+  lat: number;
+  lon: number;
+};
+
+const nearbyBusStopCache = new Map<
+  string,
+  { expiresAt: number; stops: BusStop[]; request?: Promise<BusStop[]> }
+>();
 
 export async function searchBusStops(query: string): Promise<BusStopSuggestion[]> {
   const response = await fetchWithRateLimitRetry(
@@ -388,16 +418,161 @@ export async function searchBusStops(query: string): Promise<BusStopSuggestion[]
     throw new Error(`Bus stop search unavailable (${response.status})`);
   }
   const result: {
-    matches?: { id?: string; icsId?: string; name?: string }[];
+    matches?: {
+      id?: string;
+      icsId?: string;
+      name?: string;
+      lat?: number;
+      lon?: number;
+    }[];
   } = await response.json();
   // Each physical stop has several direction-specific points sharing one icsId.
   const stops = new Map<string, BusStopSuggestion>();
   for (const match of result.matches ?? []) {
     const id = match.icsId || match.id;
     const name = match.name?.trim();
-    if (id && name && !stops.has(id)) stops.set(id, { id, name });
+    if (id && name && !stops.has(id)) {
+      stops.set(id, {
+        id,
+        name,
+        ...(typeof match.lat === "number" && Number.isFinite(match.lat) ? { lat: match.lat } : {}),
+        ...(typeof match.lon === "number" && Number.isFinite(match.lon) ? { lon: match.lon } : {}),
+      });
+    }
   }
   return [...stops.values()];
+}
+
+export async function fetchNearbyBusStops(
+  lat: number,
+  lon: number,
+  radius = 1500,
+): Promise<BusStop[]> {
+  const cacheKey = `${Math.round(lat * 100)}:${Math.round(lon * 100)}:${radius}`;
+  const cached = nearbyBusStopCache.get(cacheKey);
+  if (cached?.expiresAt && cached.expiresAt > Date.now()) return cached.stops;
+  if (cached?.request) return cached.request;
+  const query = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    stopTypes: "NaptanPublicBusCoachTram",
+    radius: String(radius),
+  });
+  const request = (async () => {
+    try {
+      const response = await fetchWithRateLimitRetry(`${API}/StopPoint?${query}`);
+      if (!response.ok) {
+        throw new Error(`Nearby bus stops unavailable (${response.status})`);
+      }
+      const result: {
+        stopPoints?: {
+          id?: string;
+          naptanId?: string;
+          commonName?: string;
+          lat?: number;
+          lon?: number;
+          lines?: { id?: string }[];
+        }[];
+      } = await response.json();
+      const stops = new Map<string, BusStop>();
+      for (const point of result.stopPoints ?? []) {
+        const id = point.naptanId || point.id;
+        const name = point.commonName?.trim();
+        if (
+          !id ||
+          !name ||
+          typeof point.lat !== "number" ||
+          !Number.isFinite(point.lat) ||
+          typeof point.lon !== "number" ||
+          !Number.isFinite(point.lon)
+        ) {
+          continue;
+        }
+        stops.set(id, {
+          id,
+          name,
+          lat: point.lat,
+          lon: point.lon,
+          lines: [...new Set((point.lines ?? []).flatMap((line) => (line.id ? [line.id] : [])))],
+        });
+      }
+      const normalizedStops = [...stops.values()];
+      nearbyBusStopCache.set(cacheKey, { expiresAt: Date.now() + 60_000, stops: normalizedStops });
+      return normalizedStops;
+    } catch (error) {
+      if (cached?.stops.length) return cached.stops;
+      nearbyBusStopCache.delete(cacheKey);
+      throw error;
+    }
+  })();
+  nearbyBusStopCache.set(cacheKey, { expiresAt: 0, stops: cached?.stops ?? [], request });
+  return request;
+}
+
+export async function fetchNearbyBusArrivals(
+  stops: BusStop[],
+  limit = 4,
+): Promise<BusVehicleArrival[]> {
+  const nearby = stops.slice(0, limit);
+  if (nearby.length === 0) return [];
+  const results: PromiseSettledResult<BusVehicleArrival[]>[] = [];
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(2, nearby.length) }, async () => {
+    while (nextIndex < nearby.length) {
+      const stop = nearby[nextIndex++];
+      if (!stop) continue;
+      try {
+        const arrivals = await fetchArrivals(stop.id);
+        results.push({
+          status: "fulfilled",
+          value: arrivals.flatMap((arrival) =>
+            arrival.vehicleId
+              ? [
+                  {
+                    ...arrival,
+                    vehicleId: arrival.vehicleId,
+                    stopId: stop.id,
+                    stopName: stop.name,
+                    lat: stop.lat,
+                    lon: stop.lon,
+                  },
+                ]
+              : [],
+          ),
+        });
+      } catch (reason) {
+        results.push({ status: "rejected", reason });
+      }
+    }
+  });
+  await Promise.all(workers);
+  const successful = results.filter(
+    (result): result is PromiseFulfilledResult<BusVehicleArrival[]> =>
+      result.status === "fulfilled",
+  );
+  if (successful.length === 0) {
+    throw new Error("Live buses unavailable because all nearby stop arrival feeds failed");
+  }
+  const byVehicle = new Map<string, BusVehicleArrival>();
+  for (const arrival of successful.flatMap((result) => result.value)) {
+    const current = byVehicle.get(arrival.vehicleId);
+    if (!current || arrival.timeToStation < current.timeToStation) {
+      byVehicle.set(arrival.vehicleId, arrival);
+    }
+  }
+  return [...byVehicle.values()].sort((a, b) => a.timeToStation - b.timeToStation);
+}
+
+export async function fetchBusLineStatuses(lineIds: string[]): Promise<LineStatus[]> {
+  const uniqueIds = [...new Set(lineIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return [];
+  const response = await fetchWithRateLimitRetry(
+    `${API}/Line/${encodeURIComponent(uniqueIds.join(","))}/Status`,
+  );
+  if (!response.ok) {
+    throw new Error(`Bus route status unavailable (${response.status})`);
+  }
+  return response.json() as Promise<LineStatus[]>;
 }
 
 export type StationAccessibilityItem = { label: string; value: string };
@@ -405,7 +580,7 @@ export type StationAccessibilityItem = { label: string; value: string };
 export async function fetchStationAccessibility(
   stopId: string,
 ): Promise<StationAccessibilityItem[]> {
-  const response = await fetch(`${API}/StopPoint/${encodeURIComponent(stopId)}`);
+  const response = await fetchWithRateLimitRetry(`${API}/StopPoint/${encodeURIComponent(stopId)}`);
   if (!response.ok) {
     throw new Error(`Station information unavailable (${response.status})`);
   }
@@ -502,10 +677,12 @@ export async function fetchAllStations(): Promise<Station[]> {
 }
 
 export async function fetchLineGeometry(line: string): Promise<number[][][]> {
-  const r = await fetch(`${API}/Line/${line}/Route/Sequence/outbound`);
-  if (!r.ok) return [];
-  const d: { lineStrings: string[] } = await r.json();
-  return d.lineStrings.flatMap((s) => JSON.parse(s) as number[][][]);
+  const r = await fetchWithRateLimitRetry(
+    `${API}/Line/${encodeURIComponent(line)}/Route/Sequence/outbound`,
+  );
+  if (!r.ok) throw new Error(`Route geometry unavailable (${r.status})`);
+  const d: { lineStrings?: string[] } = await r.json();
+  return (d.lineStrings ?? []).flatMap((s) => JSON.parse(s) as number[][][]);
 }
 
 export type LineArrival = Arrival & {

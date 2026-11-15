@@ -31,9 +31,19 @@ import type { JourneyRoute } from "@/lib/journey-route";
 import {
   LINE_COLOURS,
   OVERGROUND_LINE_IDS,
+  fetchArrivals,
+  fetchBusLineStatuses,
+  fetchLineGeometry,
+  fetchNearbyBusArrivals,
+  fetchNearbyBusStops,
   fetchLineArrivals,
   fetchOvergroundArrivals,
   fetchStationAccessibility,
+  minutes,
+  type Arrival,
+  type BusStop,
+  type BusStopSuggestion,
+  type BusVehicleArrival,
   type StationAccessibilityItem,
   type LineArrival,
   type Station,
@@ -75,20 +85,40 @@ function journeyPadding() {
 
 export default function TubeMap({
   overgroundEnabled,
+  busEnabled,
   selectedStation,
+  selectedBusStop = null,
+  favouriteBusStops = [],
+  onToggleBusStopFavourite = () => undefined,
+  onStationsLoaded = () => undefined,
+  onStationsError = () => undefined,
   hiddenLines = [],
   journeyRoute = null,
   activeStep = null,
 }: {
   overgroundEnabled: boolean;
+  busEnabled: boolean;
   selectedStation: Station | null;
+  selectedBusStop?: BusStopSuggestion | null;
+  favouriteBusStops?: BusStopSuggestion[];
+  onToggleBusStopFavourite?: (stop: BusStopSuggestion) => void;
+  onStationsLoaded?: (stations: Station[]) => void;
+  onStationsError?: (error: unknown) => void;
   hiddenLines?: string[];
   journeyRoute?: JourneyRoute | null;
   activeStep?: number | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const busStopPopupRef = useRef<maplibregl.Popup | null>(null);
+  const openBusStopRef = useRef<(stop: BusStopSuggestion) => void>(() => undefined);
   const overgroundEnabledRef = useRef(overgroundEnabled);
+  const busEnabledRef = useRef(busEnabled);
+  const favouriteBusStopsRef = useRef(favouriteBusStops);
+  const onToggleBusStopFavouriteRef = useRef(onToggleBusStopFavourite);
+  const refreshBusStopsRef = useRef<() => void>(() => undefined);
+  const refreshBusVehiclesRef = useRef<() => void>(() => undefined);
+  const busVehiclesRef = useRef<BusVehicleArrival[]>([]);
   const hiddenLinesRef = useRef(hiddenLines);
   const journeyActiveRef = useRef(Boolean(journeyRoute));
   const applyLineFilterRef = useRef<() => void>(() => undefined);
@@ -99,6 +129,8 @@ export default function TubeMap({
     bearing: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busStopError, setBusStopError] = useState<string | null>(null);
+  const [busVehicleError, setBusVehicleError] = useState<string | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
   const [isDark, setIsDark] = useState(
     () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
@@ -112,6 +144,50 @@ export default function TubeMap({
       duration: 1200,
     });
   }, [isMapReady, selectedStation]);
+
+  useEffect(() => {
+    if (!selectedBusStop || !isMapReady || !mapRef.current) return;
+    if (typeof selectedBusStop.lat !== "number" || typeof selectedBusStop.lon !== "number") return;
+    mapRef.current.flyTo({
+      center: [selectedBusStop.lon, selectedBusStop.lat],
+      zoom: 16,
+      duration: 1200,
+    });
+    openBusStopRef.current(selectedBusStop);
+  }, [isMapReady, selectedBusStop]);
+
+  useEffect(() => {
+    busEnabledRef.current = busEnabled;
+    const map = mapRef.current;
+    if (!isMapReady || !map) return;
+    for (const layerId of [
+      "bus-route-casing",
+      "bus-route",
+      "bus-stops",
+      "bus-stops-labels",
+      "bus-vehicles",
+      "bus-vehicles-labels",
+    ]) {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", busEnabled ? "visible" : "none");
+      }
+    }
+    if (busEnabled) refreshBusStopsRef.current();
+    else {
+      busStopPopupRef.current?.remove();
+      busVehiclesRef.current = [];
+      setBusVehicleError(null);
+      (map.getSource("bus-vehicles") as maplibregl.GeoJSONSource | undefined)?.setData({
+        type: "FeatureCollection",
+        features: [],
+      });
+    }
+  }, [busEnabled, isMapReady]);
+
+  useEffect(() => {
+    favouriteBusStopsRef.current = favouriteBusStops;
+    onToggleBusStopFavouriteRef.current = onToggleBusStopFavourite;
+  }, [favouriteBusStops, onToggleBusStopFavourite]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -485,6 +561,7 @@ export default function TubeMap({
     const overgroundStationIds = new Set<string>();
     const railPathsByLine = new Map<string, Coordinate[][]>();
     let actionRefreshTimer: ReturnType<typeof setInterval> | undefined;
+    let busVehicleRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let animationFrame: number | undefined;
     let cancelled = false;
     const popup = new maplibregl.Popup({
@@ -504,6 +581,44 @@ export default function TubeMap({
       selectedStationId = "";
     });
     const stationAccessibilityCache = new Map<string, Promise<StationAccessibilityItem[]>>();
+    const busStopPopup = new maplibregl.Popup({
+      closeButton: true,
+      closeOnClick: false,
+      className: "tube-popup",
+      offset: 12,
+    });
+    busStopPopupRef.current = busStopPopup;
+    let selectedBusStopId = "";
+    let selectedBusRouteId = "";
+    let busDisruptedOnly = false;
+    let selectedBusStop: BusStop | null = null;
+    let busRouteWarning = "";
+    let busStopRequestId = 0;
+    let busStopRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let busDetailsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let busStops: BusStop[] = [];
+    let busPopupDetails: {
+      arrivals?: Arrival[];
+      accessibility?: StationAccessibilityItem[];
+      statuses?: Awaited<ReturnType<typeof fetchBusLineStatuses>>;
+      arrivalError?: string;
+      accessibilityError?: string;
+      statusError?: string;
+    } = {};
+    busStopPopup.on("close", () => {
+      selectedBusStopId = "";
+      selectedBusStop = null;
+      selectedBusRouteId = "";
+      busDisruptedOnly = false;
+      busRouteWarning = "";
+      if (busDetailsRefreshTimer) clearTimeout(busDetailsRefreshTimer);
+      if (map.getSource("bus-route")) {
+        (map.getSource("bus-route") as maplibregl.GeoJSONSource).setData({
+          type: "FeatureCollection",
+          features: [],
+        });
+      }
+    });
 
     const stationAccessibilityHtml = (
       stationName: string,
@@ -519,6 +634,205 @@ export default function TubeMap({
             .join("")}</ul>`
         : '<p class="station-accessibility__empty">TfL has not provided accessibility details for this station.</p>';
       return `<section class="station-accessibility"><p class="station-accessibility__eyebrow">Station information</p><h2 class="station-accessibility__title">${escapeHtml(stationName)}</h2><p class="station-accessibility__section-title">Lines serving this station</p>${linesHtml}<p class="station-accessibility__source">Accessibility information reported by TfL</p>${details}</section>`;
+    };
+
+    const busStopPopupHtml = (stop: BusStop) => {
+      const favourite = favouriteBusStopsRef.current.some((saved) => saved.id === stop.id);
+      const arrivals = busPopupDetails.arrivals ?? [];
+      const statuses = new Map(
+        (busPopupDetails.statuses ?? []).map((status) => [status.id, status.lineStatuses[0]]),
+      );
+      const visibleArrivals = busDisruptedOnly
+        ? arrivals.filter((arrival) => {
+            const status = statuses.get(arrival.lineId);
+            return status !== undefined && status.statusSeverity !== 10;
+          })
+        : arrivals;
+      const departures = visibleArrivals.length
+        ? `<ul class="bus-stop-popup__departures">${visibleArrivals
+            .slice(0, 6)
+            .map((arrival) => {
+              const status = statuses.get(arrival.lineId);
+              const disrupted = status && status.statusSeverity !== 10;
+              return `<li><button type="button" class="bus-stop-popup__route" data-bus-line="${escapeHtml(arrival.lineId)}"><strong>${escapeHtml(arrival.lineName || arrival.lineId)}</strong><span>${escapeHtml(arrival.destinationName || arrival.towards || "Unknown destination")}</span><b>${escapeHtml(minutes(arrival.timeToStation))}</b></button>${disrupted ? `<p class="bus-stop-popup__status">${escapeHtml(status.statusSeverityDescription)}${status.reason ? `: ${escapeHtml(status.reason)}` : ""}</p>` : ""}</li>`;
+            })
+            .join("")}</ul>`
+        : busPopupDetails.arrivals
+          ? `<p class="bus-stop-popup__empty">${busDisruptedOnly ? "No disrupted bus services reported for this stop." : "No live departures reported for this stop."}</p>`
+          : '<p class="bus-stop-popup__loading">Loading live departures…</p>';
+      const disruptionFilter = busPopupDetails.arrivals
+        ? `<button type="button" class="bus-stop-popup__filter" data-bus-disrupted aria-pressed="${busDisruptedOnly}">${busDisruptedOnly ? "Show all routes" : "Disrupted only"}</button>`
+        : "";
+      const accessibility = busPopupDetails.accessibility
+        ? busPopupDetails.accessibility.length
+          ? `<ul class="station-accessibility__list">${busPopupDetails.accessibility
+              .map(
+                (item) =>
+                  `<li class="station-accessibility__item"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></li>`,
+              )
+              .join("")}</ul>`
+          : '<p class="station-accessibility__empty">TfL has not provided accessibility details for this stop.</p>'
+        : '<p class="bus-stop-popup__loading">Loading accessibility information…</p>';
+      const errors = [
+        busPopupDetails.arrivalError,
+        busPopupDetails.accessibilityError,
+        busPopupDetails.statusError,
+        busRouteWarning,
+      ]
+        .filter(Boolean)
+        .map((message) => `<p class="bus-stop-popup__error">${escapeHtml(message!)}</p>`)
+        .join("");
+      return `<section class="station-accessibility bus-stop-popup"><div class="bus-stop-popup__heading"><div><p class="station-accessibility__eyebrow">Bus stop</p><h2 class="station-accessibility__title">${escapeHtml(stop.name)}</h2></div><button type="button" class="bus-stop-popup__favourite" aria-label="${favourite ? "Remove" : "Add"} ${escapeHtml(stop.name)} ${favourite ? "from" : "to"} favourites" aria-pressed="${favourite}" data-bus-favourite><span aria-hidden="true">${favourite ? "♥" : "♡"}</span></button></div><p class="bus-stop-popup__source">TfL stop ${escapeHtml(stop.id)} · live departures refresh every 30 seconds</p>${disruptionFilter}${departures}<p class="station-accessibility__section-title">Accessibility</p><p class="station-accessibility__source">Accessibility information reported by TfL</p>${accessibility}${errors}</section>`;
+    };
+
+    const wireBusStopPopup = (stop: BusStop) => {
+      const element = busStopPopup.getElement();
+      const favouriteButton = element?.querySelector<HTMLButtonElement>("[data-bus-favourite]");
+      favouriteButton?.addEventListener("click", () => {
+        const isFavourite = favouriteBusStopsRef.current.some((saved) => saved.id === stop.id);
+        const suggestion: BusStopSuggestion = {
+          id: stop.id,
+          name: stop.name,
+          lat: stop.lat,
+          lon: stop.lon,
+        };
+        onToggleBusStopFavouriteRef.current(suggestion);
+        favouriteBusStopsRef.current = isFavourite
+          ? favouriteBusStopsRef.current.filter((saved) => saved.id !== stop.id)
+          : [...favouriteBusStopsRef.current, suggestion];
+        busStopPopup.setHTML(busStopPopupHtml(stop));
+        wireBusStopPopup(stop);
+      });
+      element?.querySelectorAll<HTMLButtonElement>("[data-bus-line]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const lineId = button.dataset["busLine"];
+          if (!lineId) return;
+          void showBusRoute(lineId);
+        });
+      });
+      element
+        ?.querySelector<HTMLButtonElement>("[data-bus-disrupted]")
+        ?.addEventListener("click", () => {
+          busDisruptedOnly = !busDisruptedOnly;
+          busStopPopup.setHTML(busStopPopupHtml(stop));
+          wireBusStopPopup(stop);
+        });
+    };
+
+    const showBusRoute = async (lineId: string) => {
+      const source = map.getSource("bus-route") as maplibregl.GeoJSONSource | undefined;
+      if (!source) return;
+      if (selectedBusRouteId === lineId) {
+        selectedBusRouteId = "";
+        busRouteWarning = "";
+        source.setData({ type: "FeatureCollection", features: [] });
+        if (selectedBusStop) busStopPopup.setHTML(busStopPopupHtml(selectedBusStop));
+        if (selectedBusStop) wireBusStopPopup(selectedBusStop);
+        return;
+      }
+      selectedBusRouteId = lineId;
+      busRouteWarning = "";
+      try {
+        const paths = await fetchLineGeometry(lineId);
+        if (selectedBusRouteId !== lineId || !selectedBusStop || !busStopPopup.isOpen()) return;
+        const features = paths
+          .filter((path) => path.length > 1)
+          .map((path) => ({
+            type: "Feature" as const,
+            geometry: { type: "LineString" as const, coordinates: path },
+            properties: { lineId },
+          }));
+        if (features.length === 0) throw new Error("TfL did not provide route geometry.");
+        source.setData({ type: "FeatureCollection", features });
+      } catch (routeError) {
+        console.error(`Unable to load bus route ${lineId}`, routeError);
+        busRouteWarning = "This bus route's path could not be loaded.";
+        if (selectedBusStop && busStopPopup.isOpen()) {
+          busStopPopup.setHTML(busStopPopupHtml(selectedBusStop));
+          wireBusStopPopup(selectedBusStop);
+        }
+      }
+    };
+
+    const renderBusStopDetails = (stop: BusStop) => {
+      if (selectedBusStopId !== stop.id || !busStopPopup.isOpen()) return;
+      busStopPopup.setHTML(busStopPopupHtml(stop));
+      wireBusStopPopup(stop);
+    };
+
+    const loadBusStopDetails = async (stop: BusStop) => {
+      busPopupDetails = {};
+      renderBusStopDetails(stop);
+      let accessibilityRequest = stationAccessibilityCache.get(stop.id);
+      if (!accessibilityRequest) {
+        accessibilityRequest = fetchStationAccessibility(stop.id);
+        stationAccessibilityCache.set(stop.id, accessibilityRequest);
+        void accessibilityRequest.catch(() => {
+          if (stationAccessibilityCache.get(stop.id) === accessibilityRequest) {
+            stationAccessibilityCache.delete(stop.id);
+          }
+        });
+      }
+      const [arrivalResult, accessibilityResult] = await Promise.allSettled([
+        fetchArrivals(stop.id),
+        accessibilityRequest,
+      ]);
+      if (selectedBusStopId !== stop.id || !busStopPopup.isOpen()) return;
+      if (arrivalResult.status === "fulfilled") {
+        busPopupDetails.arrivals = arrivalResult.value;
+      } else {
+        console.error(`Unable to load bus departures for ${stop.name}`, arrivalResult.reason);
+        busPopupDetails.arrivalError = "Live departures could not be loaded.";
+      }
+      if (accessibilityResult.status === "fulfilled") {
+        busPopupDetails.accessibility = accessibilityResult.value;
+      } else {
+        console.error(
+          `Unable to load accessibility details for ${stop.name}`,
+          accessibilityResult.reason,
+        );
+        busPopupDetails.accessibilityError = "Accessibility information could not be loaded.";
+      }
+      renderBusStopDetails(stop);
+      const routeIds = [
+        ...new Set((busPopupDetails.arrivals ?? []).map((arrival) => arrival.lineId)),
+      ];
+      if (routeIds.length > 0) {
+        try {
+          busPopupDetails.statuses = await fetchBusLineStatuses(routeIds);
+        } catch (statusError) {
+          console.error(`Unable to load bus route statuses at ${stop.name}`, statusError);
+          busPopupDetails.statusError = "Bus route status could not be loaded.";
+        }
+      }
+      renderBusStopDetails(stop);
+      if (busDetailsRefreshTimer) clearTimeout(busDetailsRefreshTimer);
+      busDetailsRefreshTimer = setTimeout(() => {
+        if (selectedBusStopId === stop.id && busStopPopup.isOpen()) {
+          void loadBusStopDetails(stop);
+        }
+      }, 30_000);
+    };
+    const openBusStop = (stop: BusStop, coordinates: [number, number]) => {
+      selectedBusStopId = stop.id;
+      selectedBusStop = stop;
+      selectedStationId = "";
+      stationPopup.remove();
+      popup.remove();
+      busStopPopup.setLngLat(coordinates).setHTML(busStopPopupHtml(stop)).addTo(map);
+      wireBusStopPopup(stop);
+      void loadBusStopDetails(stop);
+    };
+    openBusStopRef.current = (suggestion) => {
+      if (typeof suggestion.lat !== "number" || typeof suggestion.lon !== "number") return;
+      const stop = busStops.find((candidate) => candidate.id === suggestion.id) ?? {
+        id: suggestion.id,
+        name: suggestion.name,
+        lat: suggestion.lat,
+        lon: suggestion.lon,
+        lines: [],
+      };
+      openBusStop(stop, [stop.lon, stop.lat]);
     };
 
     const updateTrainPositions = () => {
@@ -655,16 +969,299 @@ export default function TubeMap({
 
     let stations: Awaited<ReturnType<typeof fetchTubeMapData>>["stations"] = [];
     let segments: Awaited<ReturnType<typeof fetchTubeMapData>>["segments"] = [];
-    let displayedLinePaths: { lineId: string; path: Coordinate[] }[] = [];
+    let displayedLinePaths: Parameters<typeof prepareOverlappingLines>[0] = [];
     let stationNames = new Map<string, string>();
+    const stationLines = new Map<string, Set<string>>();
+    const stationLinesHtml = (stationIds: string[]) => {
+      const lines = [
+        ...new Set(stationIds.flatMap((stationId) => [...(stationLines.get(stationId) ?? [])])),
+      ].sort();
+      if (lines.length === 0) {
+        return '<p class="station-accessibility__empty">Line information is not available.</p>';
+      }
+      return `<ul class="station-accessibility__lines">${lines.map(getLineBadgeHtml).join("")}</ul>`;
+    };
+    const updateStationMarkerSources = () => {
+      const groups = groupStationMarkers(stations);
+      const toFeature = (group: (typeof groups)[number]) => {
+        const allLines = new Set(
+          group.stationIds.flatMap((stationId) => [...(stationLines.get(stationId) ?? [])]),
+        );
+        return {
+          type: "Feature" as const,
+          geometry: { type: "Point" as const, coordinates: group.station.coordinates },
+          properties: {
+            id: group.station.id,
+            name: group.station.name,
+            linesHtml: stationLinesHtml(group.stationIds),
+            html: `<strong>${escapeHtml(group.station.name)}</strong>`,
+            interchange: allLines.size >= 2,
+            lineCount: allLines.size,
+          },
+        };
+      };
+      const sourceData = (sourceId: string, features: ReturnType<typeof toFeature>[]) => {
+        const data = { type: "FeatureCollection" as const, features };
+        const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+        if (source) source.setData(data);
+        else map.addSource(sourceId, { type: "geojson", data });
+      };
+      sourceData(
+        "stations",
+        groups
+          .filter((group) => !group.stationIds.every((id) => overgroundStationIds.has(id)))
+          .map(toFeature),
+      );
+      sourceData(
+        "overground-stations",
+        groups
+          .filter((group) => group.stationIds.every((id) => overgroundStationIds.has(id)))
+          .map(toFeature),
+      );
+      if (!map.getLayer("stations")) {
+        map.addLayer({
+          id: "stations",
+          type: "circle",
+          source: "stations",
+          minzoom: 12,
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 5, 14, 7.5, 17, 10],
+            "circle-color": "rgba(250, 248, 239, 0.2)",
+            "circle-stroke-color": "#494b45",
+            "circle-stroke-width": 2,
+          },
+        });
+      }
+      if (!map.getLayer("overground-stations")) {
+        map.addLayer({
+          id: "overground-stations",
+          type: "circle",
+          source: "overground-stations",
+          minzoom: 12,
+          layout: { visibility: overgroundEnabledRef.current ? "visible" : "none" },
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 5, 14, 7.5, 17, 10],
+            "circle-color": "rgba(250, 248, 239, 0.2)",
+            "circle-stroke-color": "#494b45",
+            "circle-stroke-width": 2,
+          },
+        });
+      }
+    };
+
+    const refreshBusStops = async () => {
+      if (!busEnabledRef.current || cancelled || !map.getSource("bus-stops")) return;
+      const center = map.getCenter();
+      const radius = Math.max(500, Math.min(3000, Math.round(12000 / 2 ** (map.getZoom() - 9))));
+      const requestId = ++busStopRequestId;
+      try {
+        const nearbyStops = await fetchNearbyBusStops(center.lat, center.lng, radius);
+        if (cancelled || requestId !== busStopRequestId) return;
+        busStops = nearbyStops;
+        (map.getSource("bus-stops") as maplibregl.GeoJSONSource).setData({
+          type: "FeatureCollection",
+          features: nearbyStops.map((stop) => ({
+            type: "Feature" as const,
+            geometry: { type: "Point" as const, coordinates: [stop.lon, stop.lat] },
+            properties: {
+              id: stop.id,
+              name: stop.name,
+              routes: stop.lines.slice(0, 4).join(" · "),
+            },
+          })),
+        });
+        setBusStopError(null);
+        refreshBusVehiclesRef.current();
+      } catch (busStopError) {
+        if (cancelled || requestId !== busStopRequestId) return;
+        console.error("Unable to load nearby bus stops", busStopError);
+        setBusStopError("Nearby bus stops are currently unavailable.");
+      }
+    };
+    let lastBusVehicleFetchAt = 0;
+    const refreshBusVehicles = async () => {
+      if (!busEnabledRef.current || cancelled || !map.getSource("bus-vehicles")) return;
+      if (Date.now() - lastBusVehicleFetchAt < 25_000 || busStops.length === 0) return;
+      lastBusVehicleFetchAt = Date.now();
+      const center = map.getCenter();
+      const nearestStops = [...busStops]
+        .sort(
+          (a, b) =>
+            Math.hypot(
+              (a.lon - center.lng) * Math.cos((center.lat * Math.PI) / 180),
+              a.lat - center.lat,
+            ) -
+            Math.hypot(
+              (b.lon - center.lng) * Math.cos((center.lat * Math.PI) / 180),
+              b.lat - center.lat,
+            ),
+        )
+        .slice(0, 4);
+      try {
+        const vehicles = await fetchNearbyBusArrivals(nearestStops);
+        if (cancelled || !busEnabledRef.current) return;
+        busVehiclesRef.current = vehicles;
+        (map.getSource("bus-vehicles") as maplibregl.GeoJSONSource).setData({
+          type: "FeatureCollection",
+          features: vehicles.map((vehicle) => ({
+            type: "Feature" as const,
+            geometry: { type: "Point" as const, coordinates: [vehicle.lon, vehicle.lat] },
+            properties: {
+              vehicleId: vehicle.vehicleId,
+              lineId: vehicle.lineName || vehicle.lineId,
+              stopId: vehicle.stopId,
+              stopName: vehicle.stopName,
+              html: `<section class="station-accessibility station-accessibility--compact"><p class="station-accessibility__eyebrow">Live bus · estimated position</p><h2 class="station-accessibility__title">${escapeHtml(vehicle.lineName || vehicle.lineId)}</h2><p>${escapeHtml(vehicle.destinationName || vehicle.towards || "Destination unavailable")}</p><p class="station-accessibility__source">Expected at ${escapeHtml(vehicle.stopName)} in ${escapeHtml(minutes(vehicle.timeToStation))}. TfL does not provide a GPS coordinate in this feed.</p></section>`,
+            },
+          })),
+        });
+        setBusVehicleError(null);
+      } catch (busError) {
+        if (cancelled || !busEnabledRef.current) return;
+        console.error("Unable to load nearby live buses", busError);
+        setBusVehicleError("Live bus positions are temporarily unavailable.");
+      }
+    };
+    refreshBusVehiclesRef.current = () => {
+      void refreshBusVehicles();
+    };
+    refreshBusStopsRef.current = () => {
+      void refreshBusStops();
+    };
+    const scheduleBusStopRefresh = () => {
+      if (!busEnabledRef.current) return;
+      if (busStopRefreshTimer) clearTimeout(busStopRefreshTimer);
+      busStopRefreshTimer = setTimeout(() => {
+        void refreshBusStops();
+      }, 350);
+    };
+    map.on("moveend", scheduleBusStopRefresh);
+
+    const initializeBusLayers = () => {
+      if (map.getSource("bus-stops")) return;
+      const visibility = busEnabledRef.current ? "visible" : "none";
+      map.addSource("bus-route", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "bus-route-casing",
+        type: "line",
+        source: "bus-route",
+        layout: { "line-cap": "round", "line-join": "round", visibility },
+        paint: {
+          "line-color": isDark ? "#111820" : "#ffffff",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 7, 14, 10, 17, 13],
+        },
+      });
+      map.addLayer({
+        id: "bus-route",
+        type: "line",
+        source: "bus-route",
+        layout: { "line-cap": "round", "line-join": "round", visibility },
+        paint: {
+          "line-color": "#e32017",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 11, 3, 14, 5, 17, 7],
+        },
+      });
+      map.addSource("bus-stops", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "bus-stops",
+        type: "circle",
+        source: "bus-stops",
+        minzoom: 11,
+        layout: { visibility },
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 3, 14, 5, 17, 7],
+          "circle-color": "#e32017",
+          "circle-stroke-color": isDark ? "#111820" : "#ffffff",
+          "circle-stroke-width": 1.5,
+        },
+      });
+      map.addLayer({
+        id: "bus-stops-labels",
+        type: "symbol",
+        source: "bus-stops",
+        minzoom: 14,
+        layout: {
+          visibility,
+          "text-field": ["get", "routes"],
+          "text-font": ["Noto Sans Bold"],
+          "text-size": 10,
+          "text-offset": [0, 1.3],
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color": isDark ? "#f8fafc" : "#991b1b",
+          "text-halo-color": isDark ? "#111820" : "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+      map.addSource("bus-vehicles", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "bus-vehicles",
+        type: "circle",
+        source: "bus-vehicles",
+        layout: { visibility },
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 6, 14, 8, 17, 10],
+          "circle-color": "#b91c1c",
+          "circle-stroke-color": "#fff",
+          "circle-stroke-width": 2,
+        },
+      });
+      map.addLayer({
+        id: "bus-vehicles-labels",
+        type: "symbol",
+        source: "bus-vehicles",
+        layout: {
+          visibility,
+          "text-field": ["get", "lineId"],
+          "text-font": ["Noto Sans Bold"],
+          "text-size": 9,
+          "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#fff", "text-halo-color": "#991b1b", "text-halo-width": 1 },
+      });
+    };
 
     const handleMapLoad = async () => {
       setIsMapReady(true);
       try {
+        initializeBusLayers();
+        void refreshBusStops();
+        busVehicleRefreshTimer = setInterval(() => {
+          void refreshBusVehicles();
+        }, 30_000);
         const mapData = await fetchTubeMapData();
         if (cancelled) return;
         stations = mapData.stations;
         segments = mapData.segments;
+        stationLines.clear();
+        for (const segment of segments) {
+          for (const stationId of [segment.fromStationId, segment.toStationId]) {
+            const lines = stationLines.get(stationId) ?? new Set<string>();
+            lines.add(segment.lineId);
+            stationLines.set(stationId, lines);
+          }
+        }
+        updateStationMarkerSources();
+        onStationsLoaded(
+          stations.map((station) => ({
+            id: station.id,
+            name: station.name,
+            lat: station.coordinates[1],
+            lon: station.coordinates[0],
+            lines: [...(stationLines.get(station.id) ?? [])],
+            stopIds: [station.id],
+          })),
+        );
         displayedLinePaths = snapTrackSegmentsToStations(mapData.segments, stations).map(
           ({ lineId, path }) => ({ lineId, path }),
         );
@@ -799,10 +1396,27 @@ export default function TubeMap({
         } catch (routeError) {
           console.error("Unable to load Elizabeth line route", routeError);
         }
-        for (const line of ["metropolitan", "dlr", "tram"] as const) {
-          try {
-            const routeData = await fetchTfLRouteDataAllDirections(line);
-            if (cancelled) return;
+        const railLineResults = await Promise.all(
+          (["metropolitan", "dlr", "tram"] as const).map(async (line) => {
+            const [routeResult, railResult] = await Promise.all([
+              fetchTfLRouteDataAllDirections(line).then(
+                (routeData) => ({ data: routeData }),
+                (error: unknown) => ({ error }),
+              ),
+              fetchOsmRailPaths(line).then(
+                (railPaths) => ({ data: railPaths }),
+                (error: unknown) => ({ error }),
+              ),
+            ]);
+            return { line, routeResult, railResult };
+          }),
+        );
+        if (cancelled) return;
+        for (const { line, routeResult, railResult } of railLineResults) {
+          if ("error" in routeResult) {
+            console.error(`Unable to load ${line} geometry`, routeResult.error);
+          } else {
+            const routeData = routeResult.data;
             for (const station of routeData.stations) {
               if (!stations.some((existing) => existing.id === station.id)) {
                 stations.push(station);
@@ -815,68 +1429,68 @@ export default function TubeMap({
               );
             }
             segments.push(...routeData.segments);
-            try {
-              const railPaths = await fetchOsmRailPaths(line);
-              if (cancelled) return;
-              railPathsByLine.set(line, railPaths);
-              displayedLinePaths = displayedLinePaths.filter(
-                (linePath) => linePath.lineId !== line,
-              );
-              displayedLinePaths.push(...railPaths.map((path) => ({ lineId: line, path })));
-            } catch (railError) {
-              console.error(`Unable to load ${line} rail geometry from local OSM data`, railError);
-            }
-          } catch (geomError) {
-            console.error(`Unable to load ${line} geometry`, geomError);
           }
+          if ("error" in railResult) {
+            console.error(
+              `Unable to load ${line} rail geometry from local OSM data`,
+              railResult.error,
+            );
+            continue;
+          }
+          railPathsByLine.set(line, railResult.data);
+          displayedLinePaths = displayedLinePaths.filter((linePath) => linePath.lineId !== line);
+          displayedLinePaths.push(...railResult.data.map((path) => ({ lineId: line, path })));
         }
         const overgroundRoutes = await Promise.all(
           OVERGROUND_LINE_IDS.map(async (lineId) => {
-            try {
-              const routeData = await fetchTfLRouteDataAllDirections(lineId);
-              return { lineId, routeData };
-            } catch (routeError) {
-              console.error(`Unable to load ${lineId} route geometry`, routeError);
-              return undefined;
-            }
+            const [routeResult, railResult] = await Promise.all([
+              fetchTfLRouteDataAllDirections(lineId).then(
+                (routeData) => ({ data: routeData }),
+                (error: unknown) => ({ error }),
+              ),
+              fetchOsmRailPaths(lineId).then(
+                (railPaths) => ({ data: railPaths }),
+                (error: unknown) => ({ error }),
+              ),
+            ]);
+            return { lineId, routeResult, railResult };
           }),
         );
         if (cancelled) return;
         const overgroundSegmentKeys = new Set<string>();
         const overgroundLinePaths: { lineId: string; path: Coordinate[] }[] = [];
         for (const route of overgroundRoutes) {
-          if (!route) continue;
-          const routeData = route.routeData;
-          for (const station of routeData.stations) {
-            if (!stations.some((existing) => existing.id === station.id)) {
-              overgroundStationIds.add(station.id);
-              stations.push(station);
+          if ("error" in route.routeResult) {
+            console.error(`Unable to load ${route.lineId} route geometry`, route.routeResult.error);
+          }
+          const routeData = "data" in route.routeResult ? route.routeResult.data : undefined;
+          if (routeData) {
+            for (const station of routeData.stations) {
+              if (!stations.some((existing) => existing.id === station.id)) {
+                overgroundStationIds.add(station.id);
+                stations.push(station);
+              }
+            }
+            for (const segment of routeData.segments) {
+              const endpointKey = [segment.fromStationId, segment.toStationId].sort().join(":");
+              const key = `${route.lineId}:${endpointKey}`;
+              if (overgroundSegmentKeys.has(key)) continue;
+              overgroundSegmentKeys.add(key);
+              overgroundSegments.push(segment);
             }
           }
-          for (const segment of routeData.segments) {
-            const endpointKey = [segment.fromStationId, segment.toStationId].sort().join(":");
-            const key = `${route.lineId}:${endpointKey}`;
-            if (overgroundSegmentKeys.has(key)) continue;
-            overgroundSegmentKeys.add(key);
-            overgroundSegments.push(segment);
-          }
-          let overgroundPaths = routeData.segments.map(({ path }) => path);
-          try {
-            const railPaths = await fetchOsmRailPaths(route.lineId as any);
-            if (cancelled) return;
-            if (railPaths.length > 0) {
-              railPathsByLine.set(route.lineId, railPaths);
-              overgroundPaths = railPaths;
-            } else {
-              console.warn(
-                `No detailed OSM rail geometry found for ${route.lineId}; using TfL route geometry`,
-              );
-            }
-          } catch (railError) {
+          let overgroundPaths = routeData?.segments.map(({ path }) => path) ?? [];
+          if ("data" in route.railResult && route.railResult.data.length > 0) {
+            railPathsByLine.set(route.lineId, route.railResult.data);
+            overgroundPaths = route.railResult.data;
+          } else if ("error" in route.railResult) {
             console.error(
               `Unable to load ${route.lineId} rail geometry from local OSM data`,
-              railError,
+              route.railResult.error,
             );
+          }
+          if (overgroundPaths.length === 0) {
+            console.error(`No usable geometry available for ${route.lineId}`);
           }
           overgroundLinePaths.push(
             ...overgroundPaths.map((path) => ({ lineId: route.lineId, path })),
@@ -890,8 +1504,7 @@ export default function TubeMap({
           return [];
         });
         for (const lineId of realTrackLines) {
-          const railPaths = railPathsByLine.get(lineId);
-          if (!railPaths) continue;
+          const railPaths = railPathsByLine.get(lineId) ?? [];
           const stationById = new Map(stations.map((station) => [station.id, station]));
           const pairs = segments
             .filter((segment) => segment.lineId === lineId)
@@ -902,10 +1515,20 @@ export default function TubeMap({
             });
           const stationCoordinates = stations.map((station) => station.coordinates);
           const routed =
-            pairs.length > 0
-              ? routeThroughRail(railPaths, pairs)
-              : cleanRailPaths(railPaths, stationCoordinates);
-          displayedLinePaths.push(...routed.map((path) => ({ lineId, path })));
+            railPaths.length > 0 && pairs.length > 0 ? routeThroughRail(railPaths, pairs) : [];
+          const cleaned = railPaths.length > 0 ? cleanRailPaths(railPaths, stationCoordinates) : [];
+          const fallback = segments
+            .filter((segment) => segment.lineId === lineId)
+            .map(({ path }) => path);
+          const visiblePaths =
+            routed.length > 0
+              ? routed
+              : cleaned.length > 0
+                ? cleaned
+                : railPaths.length > 0
+                  ? railPaths
+                  : fallback;
+          displayedLinePaths.push(...visiblePaths.map((path) => ({ lineId, path })));
         }
         displayedLinePaths.push(
           ...getTrackEndpointConnectors(segments, 150)
@@ -918,7 +1541,7 @@ export default function TubeMap({
             .map(({ lineId, path }) => ({ lineId, path })),
         );
         stationNames = new Map(stations.map((station) => [station.id, station.name]));
-        const stationLines = new Map<string, Set<string>>();
+        stationLines.clear();
         for (const segment of [...segments, ...elizabethSegments, ...overgroundSegments]) {
           for (const stationId of [segment.fromStationId, segment.toStationId]) {
             const lines = stationLines.get(stationId) ?? new Set<string>();
@@ -926,15 +1549,17 @@ export default function TubeMap({
             stationLines.set(stationId, lines);
           }
         }
-        const stationLinesHtml = (stationIds: string[]) => {
-          const lines = [
-            ...new Set(stationIds.flatMap((stationId) => [...(stationLines.get(stationId) ?? [])])),
-          ].sort();
-          if (lines.length === 0) {
-            return '<p class="station-accessibility__empty">Line information is not available.</p>';
-          }
-          return `<ul class="station-accessibility__lines">${lines.map(getLineBadgeHtml).join("")}</ul>`;
-        };
+        updateStationMarkerSources();
+        onStationsLoaded(
+          stations.map((station) => ({
+            id: station.id,
+            name: station.name,
+            lat: station.coordinates[1],
+            lon: station.coordinates[0],
+            lines: [...(stationLines.get(station.id) ?? [])],
+            stopIds: [station.id],
+          })),
+        );
 
         // Side-by-side spacing is real geometry sized to one drawn line width at the current zoom,
         // so lines never overlap when zoomed out and stay continuous.
@@ -1138,73 +1763,6 @@ export default function TubeMap({
             "line-width": ["interpolate", ["linear"], ["zoom"], 11, 2.5, 14, 5.5, 17, 8],
           },
         });
-        const stationMarkerGroups = groupStationMarkers(stations);
-        const createStationMarkerFeature = (group: (typeof stationMarkerGroups)[number]) => {
-          const allLines = new Set<string>();
-          for (const sid of group.stationIds) {
-            const lines = stationLines.get(sid);
-            if (lines) {
-              for (const lineId of lines) allLines.add(lineId);
-            }
-          }
-          return {
-            type: "Feature" as const,
-            geometry: { type: "Point" as const, coordinates: group.station.coordinates },
-            properties: {
-              id: group.station.id,
-              name: group.station.name,
-              linesHtml: stationLinesHtml(group.stationIds),
-              html: `<strong>${escapeHtml(group.station.name)}</strong>`,
-              interchange: allLines.size >= 2,
-              lineCount: allLines.size,
-            },
-          };
-        };
-        map.addSource("stations", {
-          type: "geojson",
-          data: {
-            type: "FeatureCollection",
-            features: stationMarkerGroups
-              .filter((group) => !group.stationIds.every((id) => overgroundStationIds.has(id)))
-              .map(createStationMarkerFeature),
-          },
-        });
-        map.addLayer({
-          id: "stations",
-          type: "circle",
-          source: "stations",
-          minzoom: 12,
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 5, 14, 7.5, 17, 10],
-            "circle-color": "rgba(250, 248, 239, 0.2)",
-            "circle-stroke-color": "#494b45",
-            "circle-stroke-width": 2,
-          },
-        });
-
-        map.addSource("overground-stations", {
-          type: "geojson",
-          data: {
-            type: "FeatureCollection",
-            features: stationMarkerGroups
-              .filter((group) => group.stationIds.every((id) => overgroundStationIds.has(id)))
-              .map(createStationMarkerFeature),
-          },
-        });
-        map.addLayer({
-          id: "overground-stations",
-          type: "circle",
-          source: "overground-stations",
-          minzoom: 12,
-          layout: { visibility: overgroundEnabledRef.current ? "visible" : "none" },
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 5, 14, 7.5, 17, 10],
-            "circle-color": "rgba(250, 248, 239, 0.2)",
-            "circle-stroke-color": "#494b45",
-            "circle-stroke-width": 2,
-          },
-        });
-
         map.addSource("trains", {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
@@ -1314,8 +1872,24 @@ export default function TubeMap({
             "circle-stroke-width": 1.5,
           },
         });
+        for (const layerId of [
+          "bus-route-casing",
+          "bus-route",
+          "bus-stops",
+          "bus-stops-labels",
+          "bus-vehicles",
+          "bus-vehicles-labels",
+        ]) {
+          map.moveLayer(layerId);
+        }
 
-        const trainLayerIds = ["trains", "elizabeth-trains", "overground-trains", "line-trains"];
+        const trainLayerIds = [
+          "bus-vehicles",
+          "trains",
+          "elizabeth-trains",
+          "overground-trains",
+          "line-trains",
+        ];
         const lineFilterLayerIds = [
           "tube-lines-glow",
           "tube-lines",
@@ -1381,6 +1955,8 @@ export default function TubeMap({
         map.on("mousemove", (event: maplibregl.MapMouseEvent) => {
           const features = map.queryRenderedFeatures(event.point, {
             layers: [
+              "bus-stops",
+              "bus-route",
               "stations",
               "overground-stations",
               ...trainLayerIds,
@@ -1390,6 +1966,9 @@ export default function TubeMap({
             ],
           });
           const feature =
+            features.find((candidate) => candidate.layer.id === "bus-vehicles") ??
+            features.find((candidate) => candidate.layer.id === "bus-stops") ??
+            features.find((candidate) => candidate.layer.id === "bus-route") ??
             features.find((candidate) => candidate.layer.id === "stations") ??
             features.find((candidate) => candidate.layer.id === "overground-stations") ??
             features.find((candidate) => candidate.layer.id === "trains") ??
@@ -1407,6 +1986,28 @@ export default function TubeMap({
             return;
           }
           map.getCanvas().style.cursor = "pointer";
+          if (feature.layer.id === "bus-stops") {
+            hoveredTrainPoint = null;
+            hoveredTrainHtml = "";
+            popup
+              .setLngLat(event.lngLat)
+              .setHTML(
+                `<section class="station-accessibility station-accessibility--compact"><p class="station-accessibility__eyebrow">Bus stop</p><h2 class="station-accessibility__title">${escapeHtml(String(feature.properties["name"]))}</h2><p class="station-accessibility__source">Click for live departures and stop information</p></section>`,
+              )
+              .addTo(map);
+            return;
+          }
+          if (feature.layer.id === "bus-route") {
+            hoveredTrainPoint = null;
+            hoveredTrainHtml = "";
+            popup
+              .setLngLat(event.lngLat)
+              .setHTML(
+                `<section class="station-accessibility station-accessibility--compact"><p class="station-accessibility__eyebrow">Bus route</p><h2 class="station-accessibility__title">${escapeHtml(String(feature.properties["lineId"]))}</h2></section>`,
+              )
+              .addTo(map);
+            return;
+          }
           if (feature.layer.id === "stations" || feature.layer.id === "overground-stations") {
             hoveredTrainPoint = null;
             hoveredTrainHtml = "";
@@ -1456,8 +2057,27 @@ export default function TubeMap({
           const station = map.queryRenderedFeatures(event.point, {
             layers: ["stations", "overground-stations"],
           })[0];
+          const busStop = map.queryRenderedFeatures(event.point, {
+            layers: ["bus-vehicles", "bus-stops"],
+          })[0];
+          if (busStop) {
+            const stopId = String(busStop.properties["stopId"] ?? busStop.properties["id"]);
+            const stopName = String(busStop.properties["stopName"] ?? busStop.properties["name"]);
+            const coordinates =
+              busStop.geometry.type === "Point" ? busStop.geometry.coordinates : null;
+            const stop = busStops.find((candidate) => candidate.id === stopId) ?? {
+              id: stopId,
+              name: stopName,
+              lat: coordinates?.[1] ?? event.lngLat.lat,
+              lon: coordinates?.[0] ?? event.lngLat.lng,
+              lines: [],
+            };
+            openBusStop(stop, [event.lngLat.lng, event.lngLat.lat]);
+            return;
+          }
           if (!station) {
             selectedStationId = "";
+            busStopPopup.remove();
             stationPopup.remove();
             popup.remove();
             return;
@@ -1585,6 +2205,7 @@ export default function TubeMap({
         }, 30_000);
       } catch (mapError) {
         console.error("Unable to load the tube map data", mapError);
+        onStationsError(mapError);
         setError("The map or its track data could not be loaded.");
       }
     };
@@ -1593,8 +2214,15 @@ export default function TubeMap({
 
     return () => {
       cancelled = true;
+      busStopRequestId += 1;
+      if (busStopRefreshTimer) clearTimeout(busStopRefreshTimer);
+      if (busDetailsRefreshTimer) clearTimeout(busDetailsRefreshTimer);
+      if (refreshBusStopsRef.current) refreshBusStopsRef.current = () => undefined;
+      if (refreshBusVehiclesRef.current) refreshBusVehiclesRef.current = () => undefined;
+      if (openBusStopRef.current) openBusStopRef.current = () => undefined;
       setIsMapReady(false);
       if (actionRefreshTimer) clearInterval(actionRefreshTimer);
+      if (busVehicleRefreshTimer) clearInterval(busVehicleRefreshTimer);
       if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
       const center = map.getCenter();
       if (mapRef.current === map) mapRef.current = null;
@@ -1604,6 +2232,8 @@ export default function TubeMap({
         pitch: map.getPitch(),
         bearing: map.getBearing(),
       };
+      busStopPopup.remove();
+      if (busStopPopupRef.current === busStopPopup) busStopPopupRef.current = null;
       map.remove();
     };
   }, [isDark]);
@@ -1617,6 +2247,22 @@ export default function TubeMap({
           role="alert"
         >
           {error}
+        </div>
+      )}
+      {busEnabled && busStopError && (
+        <div
+          className="absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-md bg-white/95 px-3 py-2 text-center font-mono text-xs text-red-700 shadow"
+          role="alert"
+        >
+          {busStopError}
+        </div>
+      )}
+      {busEnabled && busVehicleError && (
+        <div
+          className={`absolute left-1/2 z-10 -translate-x-1/2 rounded-md bg-white/95 px-3 py-2 text-center font-mono text-xs text-red-700 shadow ${busStopError ? "top-24" : "top-14"}`}
+          role="status"
+        >
+          {busVehicleError}
         </div>
       )}
     </>

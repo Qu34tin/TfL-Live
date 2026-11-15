@@ -61,6 +61,7 @@ export const sameJourney = (a: RecentJourney, b: RecentJourney) =>
 
 export const STORAGE_KEYS = {
   favouriteStations: "tfl:favourite-stations",
+  favouriteBusStops: "tfl:favourite-bus-stops",
   recentStations: "tfl:recent-stations",
   recentJourneys: "tfl:recent-journeys",
   watchedLines: "tfl:watched-lines",

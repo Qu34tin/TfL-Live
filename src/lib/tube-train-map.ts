@@ -2,6 +2,16 @@ const MAP_DATA_URL = "https://www.londonunderground.live";
 const TRAIN_ACTIONS_URL = "https://api.londonunderground.live/get_actions_for_all_trains";
 
 export type Coordinate = [number, number];
+type OsmRailLineId =
+  | "metropolitan"
+  | "dlr"
+  | "tram"
+  | "liberty"
+  | "lioness"
+  | "mildmay"
+  | "suffragette"
+  | "weaver"
+  | "windrush";
 
 export type TubeStation = {
   id: string;
@@ -102,9 +112,7 @@ export function parseOsmRailPaths(data: unknown, lineId: string): Coordinate[][]
   return paths;
 }
 
-export async function fetchOsmRailPaths(
-  lineId: "metropolitan" | "dlr" | "tram",
-): Promise<Coordinate[][]> {
+export async function fetchOsmRailPaths(lineId: OsmRailLineId): Promise<Coordinate[][]> {
   const response = await fetch("/data/rail-track-geometries.json");
   if (!response.ok) {
     throw new Error(`OpenStreetMap rail geometry unavailable (${response.status})`);
@@ -253,7 +261,7 @@ function smoothStationConnector(
   const startPoint = toMeters(start);
   const endPoint = toMeters(end);
   const unit = (vector: Coordinate): Coordinate => {
-    const meterVector = [vector[0] * longitudeScale, vector[1]];
+    const meterVector: Coordinate = [vector[0] * longitudeScale, vector[1]];
     const length = Math.hypot(meterVector[0], meterVector[1]) || 1;
     return [meterVector[0] / length, meterVector[1] / length];
   };
